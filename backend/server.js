@@ -29,13 +29,21 @@ dotenv.config();
 const app = express();
 const httpServer = createServer(app);
 
+// Build an explicit allowlist; credentials cannot be combined with '*'
+const allowedOrigins = [
+  process.env.FRONTEND_URL,            // e.g., https://www.bigbitefoods.shop
+  process.env.FRONTEND_URL?.replace('www.', ''),
+  process.env.APPROVED_SITE_URL,       // e.g., https://bharat-kumar-19030.github.io
+  'http://localhost:5173',
+].filter(Boolean);
+
 
 console.log('🔧 Current FRONTEND_URL env:', process.env.FRONTEND_URL);
 
 // Simple CORS configuration - allow all origins in production for maximum compatibility
 export const io = new Server(httpServer, {
   cors: {
-    origin:'*',
+    origin:true, // allow all origins (for testing and maximum compatibility)
     // [process.env.FRONTEND_URL,
     //         process.env.APPROVED_SITE_URL,
     //         'http://localhost:5173'
@@ -51,7 +59,7 @@ export const io = new Server(httpServer, {
 
 app.use(
   cors({
-    origin:'*', // allow all
+    origin:true, // allow all
     // [process.env.FRONTEND_URL,
     //         process.env.APPROVED_SITE_URL,
     //         'http://localhost:5173'
