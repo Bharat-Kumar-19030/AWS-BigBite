@@ -55,7 +55,7 @@ app.use(
     // [process.env.FRONTEND_URL,
     //         process.env.APPROVED_SITE_URL,
     //         'http://localhost:5173'
-    //       ],
+    //       ].filter(Boolean),
     credentials: true,
   })
 );
