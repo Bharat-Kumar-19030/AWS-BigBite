@@ -1,7 +1,7 @@
 approved-site/
 # Dependencies
 node_modules/
-
+*.md
 # Environment variables
 .env
 .env.local

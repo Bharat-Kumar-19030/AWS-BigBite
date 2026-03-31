@@ -22,6 +22,7 @@ import ratingRoutes from "./routes/rating.js";
 import wishlistRoutes from "./routes/wishlist.js";
 import chatbotRoutes from "./routes/chatbot.js";
 import paymentRoutes from "./routes/payment.js";
+import { mapOrderToSocketData } from './utils/orderSocketData.js';
 
 // Load env vars
 dotenv.config();
@@ -34,7 +35,10 @@ console.log('🔧 Current FRONTEND_URL env:', process.env.FRONTEND_URL);
 // Simple CORS configuration - allow all origins in production for maximum compatibility
 export const io = new Server(httpServer, {
   cors: {
-    origin: true, // Allow all origins
+    origin: [process.env.FRONTEND_URL,
+            process.env.APPROVED_SITE_URL,
+            'http://localhost:5173'
+          ],
     credentials: true,
   },
   transports: ["polling", "websocket"],
@@ -46,7 +50,10 @@ export const io = new Server(httpServer, {
 
 app.use(
   cors({
-    origin: true, // Allow all origins
+    origin: [process.env.FRONTEND_URL,
+            process.env.APPROVED_SITE_URL,
+            'http://localhost:5173'
+          ],
     credentials: true,
   })
 );
@@ -98,8 +105,9 @@ configurePassport();
 // Connect to MongoDB
 mongoose
   .connect(process.env.MONGODB_URI)
-  .then(() => {
+  .then(async () => {
     console.log('MongoDB connected successfully');
+    await hydrateActiveOrdersPool();
   })
   .catch((err) => {
     console.error('MongoDB connection error:', err);
@@ -121,6 +129,75 @@ app.use("/api/payment", paymentRoutes);
 export const activeRidersPool = new Map();
 // Active orders pool - stores order details with real-time updates
 export const activeOrdersPool = new Map();
+
+// Reload in-memory pools from database on startup so reconnecting clients don't lose active orders
+async function hydrateActiveOrdersPool() {
+  try {
+    const openStatuses = ['pending', 'accepted', 'awaiting_rider', 'rider_assigned', 'preparing', 'ready', 'on_the_way'];
+    const openOrders = await Order.find({ status: { $in: openStatuses } })
+      .populate([
+        { path: 'customer', select: 'name phone' },
+        { path: 'restaurant', select: 'restaurantDetails' },
+        { path: 'items.menuItem', select: 'name price image category' },
+      ]);
+
+    openOrders.forEach((order) => {
+      const socketPayload = mapOrderToSocketData(order);
+      if (socketPayload?.orderId) {
+        activeOrdersPool.set(socketPayload.orderId, socketPayload);
+      }
+    });
+
+    console.log(`Hydrated activeOrdersPool with ${activeOrdersPool.size} orders`);
+  } catch (err) {
+    console.error('Failed to hydrate activeOrdersPool:', err);
+  }
+}
+
+function getActiveOrdersForRestaurant(restaurantId) {
+  if (!restaurantId) return [];
+  return Array.from(activeOrdersPool.values()).filter(
+    (order) => order.restaurantId === restaurantId.toString()
+  );
+}
+
+function joinRestaurantToOrderRooms(socket, restaurantId, orders) {
+  orders.forEach((order) => {
+    if (order.orderId) {
+      socket.join(`order_${order.orderId}`);
+    }
+  });
+}
+
+async function syncRiderActiveOrders(riderId, riderDoc, riderCoords) {
+  const activeStatuses = ['rider_assigned', 'preparing', 'ready', 'picked_up', 'on_the_way'];
+  const assignedOrders = await Order.find({
+    rider: riderId,
+    status: { $in: activeStatuses },
+  }).populate([
+    { path: 'customer', select: 'name phone' },
+    { path: 'restaurant', select: 'restaurantDetails' },
+    { path: 'items.menuItem', select: 'name price image category' },
+  ]);
+
+  const orderIds = [];
+
+  assignedOrders.forEach((order) => {
+    const key = order._id.toString();
+    const socketPayload = activeOrdersPool.get(key) || mapOrderToSocketData(order);
+    socketPayload.status = order.status;
+    socketPayload.riderId = riderId;
+    socketPayload.riderDetails = {
+      name: riderDoc?.name,
+      phone: riderDoc?.phone,
+    };
+    socketPayload.riderCoordinates = riderCoords || socketPayload.riderCoordinates;
+    activeOrdersPool.set(key, socketPayload);
+    orderIds.push(key);
+  });
+
+  return orderIds;
+}
 
 // Socket.IO connection handling
 io.on('connection', (socket) => {
@@ -165,6 +242,9 @@ io.on('connection', (socket) => {
         longitude: rider.riderDetails?.currentLocation?.longitude || 0,
       };
 
+      // Ensure active orders are repopulated for this rider (e.g., after reload)
+      const riderActiveOrders = await syncRiderActiveOrders(riderId, rider, riderCoords);
+
       // Add rider to active pool
       activeRidersPool.set(riderId, {
         socketId: socket.id,
@@ -172,16 +252,16 @@ io.on('connection', (socket) => {
         name: rider.name,
         phone: rider.phone,
         coordinates: riderCoords,
-        activeOrders: [],
+        activeOrders: riderActiveOrders,
         lastUpdate: new Date(),
       });
 
       socket.riderId = riderId;
       socket.join(`rider_${riderId}`);
       
-      console.log(`🏍️ Rider ${rider.name} (${riderId}) joined active pool at [${riderCoords.latitude}, ${riderCoords.longitude}]`);
+      console.log(`🏍️ Rider ${rider.name} (${riderId}) joined active pool at [${riderCoords.latitude}, ${riderCoords.longitude}] with ${riderActiveOrders.length} active order(s)`);
       console.log(`📊 Total active riders: ${activeRidersPool.size}`);
-      socket.emit('joined_pool', { message: 'Successfully joined active riders pool' });
+      socket.emit('joined_pool', { message: 'Successfully joined active riders pool', activeOrders: riderActiveOrders });
     } catch (error) {
       console.error('❌ Error in rider_join_pool:', error);
     }
@@ -202,6 +282,7 @@ io.on('connection', (socket) => {
   // Rider live location update (every 10 seconds, not saved to DB)
   socket.on('rider_location_update', ({ riderId, coordinates }) => {
     try {
+      console.log(`📍 Rider location update from ${riderId}: lat=${coordinates?.latitude}, lon=${coordinates?.longitude}`);
       const riderData = activeRidersPool.get(riderId);
       if (riderData) {
         riderData.coordinates = coordinates;
@@ -254,6 +335,12 @@ io.on('connection', (socket) => {
       socket.join(`restaurant_${restaurantId}`);
       console.log(`🏪 Restaurant ${restaurantId} authenticated and joined room`);
       socket.emit('authenticated', { message: 'Restaurant authenticated successfully' });
+
+      const activeOrders = getActiveOrdersForRestaurant(restaurantId);
+      joinRestaurantToOrderRooms(socket, restaurantId, activeOrders);
+      if (activeOrders.length) {
+        socket.emit('active_orders_snapshot', activeOrders);
+      }
     } catch (error) {
       console.error('❌ Error in restaurant_authenticate:', error);
     }
@@ -336,7 +423,9 @@ io.on('connection', (socket) => {
   socket.on('rider_accept_order', async ({ orderId, riderId }) => {
     try {
       const order = await Order.findById(orderId).populate('restaurant customer rider');
-      if (!order || order.status !== 'accepted') {
+      const statusIsAvailable = order?.status === 'accepted' || order?.status === 'awaiting_rider';
+
+      if (!order || !statusIsAvailable) {
         socket.emit('error', { message: 'Order not available' });
         return;
       }
@@ -379,7 +468,10 @@ io.on('connection', (socket) => {
       if (orderSocket) {
         orderSocket.status = 'rider_assigned';
         orderSocket.riderId = riderId;
-        orderSocket.riderDetails = riderData;
+        orderSocket.riderDetails = {
+          name: riderUser?.name,
+          phone: riderUser?.phone,
+        };
         orderSocket.riderCoordinates = riderData?.coordinates;
         activeOrdersPool.set(orderId, orderSocket);
       }
@@ -462,6 +554,13 @@ io.on('connection', (socket) => {
 
       // Broadcast to all parties
       io.to(`order_${orderId}`).emit('order_status_changed', {
+        orderId,
+        status,
+        timestamp: new Date(),
+      });
+
+      // Also notify restaurant room so dashboard updates immediately
+      io.to(`restaurant_${order.restaurant}`).emit('order_status_changed', {
         orderId,
         status,
         timestamp: new Date(),
@@ -619,19 +718,39 @@ function calculateDistance(lat1, lon1, lat2, lon2) {
 setInterval(async () => {
   try {
     const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000);
+
     const pendingOrders = await Order.find({
       status: 'pending',
       createdAt: { $lt: tenMinutesAgo },
     });
 
-    for (const order of pendingOrders) {
+    const riderAwaitingOrders = await Order.find({
+      status: { $in: ['accepted', 'awaiting_rider'] },
+      rider: null,
+      $or: [
+        { acceptedAt: { $lt: tenMinutesAgo } },
+        { acceptedAt: null, createdAt: { $lt: tenMinutesAgo } },
+      ],
+    });
+
+    const toReject = [...pendingOrders, ...riderAwaitingOrders];
+
+    for (const order of toReject) {
+      const previousStatus = order.status;
       order.status = 'auto_rejected';
-      order.rejectionReason = 'Restaurant did not respond within 10 minutes';
+      order.rejectionReason = 'No response within 10 minutes';
+      order.cancelledBy = previousStatus === 'pending' ? 'restaurant' : 'rider';
       await order.save();
 
       activeOrdersPool.delete(order._id.toString());
 
       io.to(`order_${order._id}`).emit('order_status_changed', {
+        orderId: order._id,
+        status: 'auto_rejected',
+        message: 'Order automatically rejected due to no response',
+      });
+
+      io.to(`restaurant_${order.restaurant}`).emit('order_status_changed', {
         orderId: order._id,
         status: 'auto_rejected',
         message: 'Order automatically rejected due to no response',

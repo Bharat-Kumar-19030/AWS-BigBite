@@ -6,8 +6,6 @@ import { AppProvider } from './context/AppContext.jsx';
 import { AuthProvider } from './context/AuthContext.jsx';
 import { SocketProvider } from './contexts/SocketContext.jsx';
 import { Toaster } from 'react-hot-toast';
-// Import network diagnostic (available in console as window.networkDiag())
-import './utils/networkDiagnostic.js';
 
 createRoot(document.getElementById('root')).render(
   <StrictMode>

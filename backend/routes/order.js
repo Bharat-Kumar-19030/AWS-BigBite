@@ -3,6 +3,7 @@ import Order from '../models/Order.js';
 import User from '../models/User.js';
 import Payment from '../models/Payment.js';
 import { io, activeOrdersPool, activeRidersPool } from '../server.js';
+import { mapOrderToSocketData } from '../utils/orderSocketData.js';
 
 const router = express.Router();
 
@@ -67,6 +68,10 @@ router.post('/pending', async (req, res) => {
 
     await order.save();
 
+    // Remove from active pool once delivered
+    const deliveredKey = order._id.toString();
+    activeOrdersPool.delete(deliveredKey);
+
     console.log('✅ Pending order created:', order._id);
 
     res.status(201).json({
@@ -125,20 +130,11 @@ router.post('/:orderId/confirm', async (req, res) => {
 
     console.log('✅ Order confirmed:', orderId);
 
-    // Format order data for socket emission (same format as COD orders)
-    const orderSocketData = {
-      _id: order._id,
-      orderNumber: order.orderNumber,
-      customer: order.customer,
-      restaurant: order.restaurant,
-      items: order.items,
-      totalAmount: order.totalAmount,
-      deliveryAddress: order.deliveryAddress,
-      status: order.status,
-      paymentMethod: order.paymentMethod,
-      paymentStatus: order.paymentStatus,
-      createdAt: order.createdAt,
-    };
+    const orderSocketData = mapOrderToSocketData(order);
+
+    // Persist in the in-memory pool so reconnects and riders can see it
+    activeOrdersPool.set(order._id.toString(), orderSocketData);
+    console.log(`📦 Order added to pool from confirm. Pool size: ${activeOrdersPool.size}`);
 
     // Emit socket event to restaurant for new order notification
     console.log(`📡 Emitting new_order_received to restaurant_${order.restaurant._id}`);
@@ -309,65 +305,7 @@ router.post('/', async (req, res) => {
 
     console.log("📋 Order items after populate:", JSON.stringify(order.items, null, 2));
     
-    // Format items - handle case where menuItem might not populate
-    const formattedItems = order.items.map(item => {
-      if (!item.menuItem) {
-        console.warn(`⚠️ MenuItem not found for item, using fallback data:`, item);
-        // U se the name/price from the item itself (if they exist in schema)
-        return {
-          menuItem: null,
-          name: item.name || 'Unknown Item',
-          price: item.price || 0,
-          quantity: item.quantity,
-          _id: item._id
-        };
-      }
-      
-      return {
-        menuItem: {
-          _id: item.menuItem._id,
-          name: item.menuItem.name,
-          price: item.menuItem.price,
-          image: item.menuItem.image,
-          category: item.menuItem.category
-        },
-        name: item.menuItem.name,
-        price: item.menuItem.price,
-        quantity: item.quantity,
-        _id: item._id
-      };
-    });
-    
-    const orderSocketData = {
-      orderId: order._id.toString(),
-      orderNumber: order.orderNumber,
-      customerId,
-      restaurantId,
-      customerName: order.customer.name,
-      customerPhone: order.customer.phone,
-      restaurantName: restaurant.restaurantDetails.kitchenName,
-      restaurantCoordinates: {
-        latitude: restaurant.restaurantDetails.address.latitude,
-        longitude: restaurant.restaurantDetails.address.longitude,
-      },
-      deliveryCoordinates: {
-        latitude: order.deliveryAddress.latitude,
-        longitude: order.deliveryAddress.longitude,
-      },
-      deliveryAddress: order.deliveryAddress,
-      status: 'pending',
-      items: formattedItems,
-      subtotal: order.subtotal,
-      deliveryFee: order.deliveryFee,
-      platformFee: order.platformFee,
-      gst: order.gst,
-      totalAmount: order.totalAmount,
-      createdAt: order.createdAt,
-      riderId: null,
-      riderDetails: null,
-      riderCoordinates: null,
-      distanceToRestaurant: 0,
-    };
+    const orderSocketData = mapOrderToSocketData(order);
 
     // Add to active orders pool
     activeOrdersPool.set(order._id.toString(), orderSocketData);
@@ -427,7 +365,9 @@ router.post('/:id/accept', async (req, res) => {
     }
 
     // Check if order is still awaiting rider assignment
-    if (order.status !== 'awaiting_rider' || order.rider) {
+    const statusIsAvailable = order.status === 'awaiting_rider' || order.status === 'accepted';
+
+    if (!statusIsAvailable || order.rider) {
       return res.status(400).json({
         success: false,
         message: 'Order has already been assigned or is not available',
@@ -515,6 +455,13 @@ router.post('/:id/verify-pickup-pin', async (req, res) => {
     order.status = 'picked_up';
     order.pickedUpAt = new Date();
     await order.save();
+
+    const poolKey = orderId.toString();
+    const poolOrder = activeOrdersPool.get(poolKey);
+    if (poolOrder) {
+      poolOrder.status = 'picked_up';
+      activeOrdersPool.set(poolKey, poolOrder);
+    }
 
     // Populate for socket emission
     await order.populate([
@@ -733,6 +680,16 @@ router.patch('/:id/status', async (req, res) => {
 
     await order.save();
 
+    // Keep the in-memory pool in sync for reconnecting clients
+    const poolKey = orderId.toString();
+    const poolOrder = activeOrdersPool.get(poolKey);
+    if (status === 'delivered' || status === 'cancelled') {
+      activeOrdersPool.delete(poolKey);
+    } else if (poolOrder) {
+      poolOrder.status = status;
+      activeOrdersPool.set(poolKey, poolOrder);
+    }
+
     // Emit status update to order room
     io.to(`order_${orderId}`).emit('order_status_changed', {
       orderId: order._id,
@@ -829,7 +786,7 @@ router.get('/available', async (req, res) => {
 
     // Fetch orders from database that are awaiting riders (accepted by restaurant, not yet picked by rider)
     const orders = await Order.find({ 
-      status: 'awaiting_rider',
+      status: { $in: ['awaiting_rider', 'accepted'] },
       rider: null // Only orders not yet assigned to any rider
     })
       .populate([

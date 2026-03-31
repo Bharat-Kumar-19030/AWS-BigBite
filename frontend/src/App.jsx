@@ -30,6 +30,8 @@ function App() {
   if (loading) {
     return (
       <div className="min-h-screen bg-white flex items-center justify-center">
+        {/* <Navbar /> */}
+        <Hero />
         <div className="text-center">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-red-500 mx-auto mb-4"></div>
           <p className="text-gray-600">Loading...</p>

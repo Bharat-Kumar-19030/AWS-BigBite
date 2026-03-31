@@ -264,15 +264,13 @@
 
   <script>
     // Configuration
-    const BACKEND_URL = 'https://api1.bigbitefoods.shop';
-    const SECRET_KEY = 'bigbite-payment-secret-2024'; // Same as frontend
-    
-    // Decryption utility
+    const BACKEND_FALLBACK = 'https://bigbite-backend-i4u4.onrender.co';
+    const SECRET_KEY = 'bigbite-payment-secret-2024'; // Shared with main site for HMAC
+
     async function createSignature(data) {
       const encoder = new TextEncoder();
       const keyData = encoder.encode(SECRET_KEY);
       const messageData = encoder.encode(data);
-      
       const key = await crypto.subtle.importKey(
         'raw',
         keyData,
@@ -280,73 +278,57 @@
         false,
         ['sign']
       );
-      
       const signature = await crypto.subtle.sign('HMAC', key, messageData);
       return Array.from(new Uint8Array(signature))
-        .map(b => b.toString(16).padStart(2, '0'))
+        .map((b) => b.toString(16).padStart(2, '0'))
         .join('');
     }
 
     async function decryptPaymentData(encryptedData) {
-      try {
-        const [base64Data, signature] = encryptedData.split('.');
-        
-        if (!base64Data || !signature) {
-          throw new Error('Invalid encrypted data format');
-        }
-        
-        // Verify signature
-        const expectedSignature = await createSignature(base64Data);
-        if (signature !== expectedSignature) {
-          throw new Error('Data tampering detected - signature mismatch');
-        }
-        
-        // Decode data
-        const jsonString = atob(base64Data);
-        return JSON.parse(jsonString);
-      } catch (error) {
-        console.error('Decryption error:', error);
-        throw new Error('Failed to decrypt payment data');
+      const [base64Data, signature] = encryptedData.split('.');
+      if (!base64Data || !signature) {
+        throw new Error('Invalid encrypted data format');
       }
+      const expectedSignature = await createSignature(base64Data);
+      if (signature !== expectedSignature) {
+        throw new Error('Data tampering detected - signature mismatch');
+      }
+      const jsonString = atob(base64Data);
+      return JSON.parse(jsonString);
     }
-    
-    // Get URL parameters
+
     const urlParams = new URLSearchParams(window.location.search);
-    let amount, referenceId, returnUrl;
-    
-    // Check if data is encrypted (new format) or plain (old format for backward compatibility)
+    const backendUrlParam = urlParams.get('backend');
     const encryptedData = urlParams.get('data');
-    
-    if (encryptedData) {
-      // New encrypted format
-      console.log('🔐 Decrypting payment data...');
+
+    const BACKEND_URL = backendUrlParam || BACKEND_FALLBACK;
+    let amount, referenceId, returnUrl;
+
+    if (!encryptedData) {
+      showError('Missing payment payload. Please start payment from the main site.');
+    } else {
       decryptPaymentData(decodeURIComponent(encryptedData))
-        .then(paymentData => {
+        .then((paymentData) => {
           amount = parseFloat(paymentData.amount);
           referenceId = paymentData.ref;
           returnUrl = paymentData.returnUrl;
-          
-          // Verify timestamp (optional - prevent replay attacks)
-          const age = Date.now() - paymentData.timestamp;
-          if (age > 10 * 60 * 1000) { // 10 minutes
+
+          const age = Date.now() - (paymentData.timestamp || 0);
+          if (Number.isFinite(age) && age > 10 * 60 * 1000) {
             throw new Error('Payment link expired');
           }
-          
-          console.log('✅ Payment data decrypted:', { amount, referenceId });
-          initializePayment();
+
+          if (!amount || !referenceId || !returnUrl) {
+            throw new Error('Invalid payment parameters');
+          }
+
+          console.log('✅ Payment data decrypted:', { amount, referenceId, returnUrl });
+          initializePayment(amount, referenceId, returnUrl);
         })
-        .catch(error => {
+        .catch((error) => {
           console.error('❌ Decryption failed:', error);
           showError('Invalid or tampered payment link. Please try again from the main website.');
         });
-    } else {
-      // Old plain format (for backward compatibility)
-      amount = parseFloat(urlParams.get('amount'));
-      referenceId = urlParams.get('ref');
-      returnUrl = decodeURIComponent(urlParams.get('returnUrl') || '');
-      
-      console.log('⚠️ Using plain text payment data (deprecated)');
-      initializePayment();
     }
 
     console.log('💳 Payment page loaded');
@@ -354,7 +336,7 @@
     // Initialize payment
     let razorpayOrderData = null;
 
-    async function initializePayment() {
+    async function initializePayment(amount, referenceId, returnUrl) {
       try {
         // Validate parameters first
         if (!amount || !referenceId || !returnUrl) {

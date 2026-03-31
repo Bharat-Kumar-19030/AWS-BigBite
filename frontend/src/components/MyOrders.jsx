@@ -132,6 +132,7 @@ const MyOrders = () => {
     const colors = {
       pending: 'bg-yellow-100 text-yellow-800',
       accepted: 'bg-blue-100 text-blue-800',
+      rider_assigned: 'bg-green-100 text-green-800',
       preparing: 'bg-purple-100 text-purple-800',
       ready: 'bg-indigo-100 text-indigo-800',
       picked_up: 'bg-cyan-100 text-cyan-800',
@@ -144,8 +145,9 @@ const MyOrders = () => {
 
   const getStatusText = (status) => {
     const texts = {
-      pending: 'Waiting for Rider',
-      accepted: 'Rider Accepted',
+      pending: 'Waiting for Restaurant',
+      accepted: 'Restaurant Accepted',
+      rider_assigned: 'Rider Accepted',
       preparing: 'Being Prepared',
       ready: 'Ready for Pickup',
       picked_up: 'Picked Up',

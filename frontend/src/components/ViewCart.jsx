@@ -391,20 +391,19 @@ const ViewCart = () => {
         orderData
       }));
 
-      // COMPLIANCE: Redirect to approved Razorpay website
+      // Redirect-only flow to approved Razorpay site (pre-verified domain) with encrypted payload
       const approvedSiteUrl = 'https://bharat-kumar-19030.github.io/Learno-Hub/payment.html';
       const returnUrl = window.location.origin + '/payment-callback';
-      
-      // Encrypt payment data to prevent URL tampering
+
       const paymentData = {
         amount: totalAmount,
         ref: orderId,
-        returnUrl: returnUrl,
-        timestamp: Date.now()
+        returnUrl,
+        timestamp: Date.now(),
       };
-      
+
       const encryptedData = await encryptPaymentData(paymentData);
-      const redirectUrl = `${approvedSiteUrl}?data=${encodeURIComponent(encryptedData)}`;
+      const redirectUrl = `${approvedSiteUrl}?data=${encodeURIComponent(encryptedData)}&backend=${encodeURIComponent(SERVER_URL)}`;
 
       console.log('🔄 Redirecting to approved payment site with encrypted data');
       
