@@ -370,7 +370,7 @@ const RestaurantDashboard = () => {
         return allOrders.filter((o) => o.status === 'pending');
       case 'accepted':
         // Show orders accepted by restaurant but not yet picked up by rider
-        return allOrders.filter(o => o.status === 'awaiting_rider');
+        return allOrders.filter(o => o.status === 'awaiting_rider'||o.status==="accepted");
       case 'assigned':
         return allOrders.filter(o => ['rider_assigned', 'preparing', 'ready', 'picked_up', 'on_the_way'].includes(o.status));
       case 'delivered':
@@ -457,7 +457,7 @@ const RestaurantDashboard = () => {
             <nav className="flex -mb-px justify-between w-full overflow-auto scroll scrollbar-hide">
               {[
                 { key: 'pending', label: 'Pending', count: allOrders.filter(o => o.status === 'pending').length },
-                { key: 'accepted', label: 'Accepted', count: allOrders.filter(o => o.status === 'awaiting_rider').length },
+                { key: 'accepted', label: 'Accepted', count: allOrders.filter(o => o.status === 'awaiting_rider'||o.status==="accepted").length },
                 { key: 'assigned', label: 'Assigned/Active', count: allOrders.filter(o => ['rider_assigned', 'preparing', 'ready', 'picked_up', 'on_the_way'].includes(o.status)).length },
                 { key: 'delivered', label: 'Delivered', count: allOrders.filter(o => o.status === 'delivered').length },
                 { key: 'rejected', label: 'Rejected/Cancelled', count: allOrders.filter(o => ['rejected', 'auto_rejected', 'cancelled'].includes(o.status)).length },
