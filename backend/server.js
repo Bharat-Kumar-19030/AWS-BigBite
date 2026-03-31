@@ -35,10 +35,11 @@ console.log('🔧 Current FRONTEND_URL env:', process.env.FRONTEND_URL);
 // Simple CORS configuration - allow all origins in production for maximum compatibility
 export const io = new Server(httpServer, {
   cors: {
-    origin: [process.env.FRONTEND_URL,
-            process.env.APPROVED_SITE_URL,
-            'http://localhost:5173'
-          ],
+    origin:'*',
+    // [process.env.FRONTEND_URL,
+    //         process.env.APPROVED_SITE_URL,
+    //         'http://localhost:5173'
+    //       ],
     credentials: true,
   },
   transports: ["polling", "websocket"],
@@ -50,10 +51,11 @@ export const io = new Server(httpServer, {
 
 app.use(
   cors({
-    origin: [process.env.FRONTEND_URL,
-            process.env.APPROVED_SITE_URL,
-            'http://localhost:5173'
-          ],
+    origin:'*', // allow all
+    // [process.env.FRONTEND_URL,
+    //         process.env.APPROVED_SITE_URL,
+    //         'http://localhost:5173'
+    //       ],
     credentials: true,
   })
 );
