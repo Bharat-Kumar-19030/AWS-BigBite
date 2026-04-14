@@ -428,10 +428,48 @@ const RestaurantExplore = () => {
 
         {/* Loading State */}
         {loading && (
-          <div className="text-center py-16">
-            <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-red-500"></div>
-            <p className="mt-4 text-gray-600">Loading {viewMode === 'restaurants' ? 'restaurants' : 'food items'}...</p>
+          <div className="p-6">
+
+  {/* Header */}
+  <div className="flex items-center gap-3 mb-6">
+    <div className="h-6 w-12 bg-green-300 rounded-full animate-pulse"></div>
+    <div className="h-5 w-48 bg-gray-300 rounded animate-pulse"></div>
+  </div>
+
+  {/* Grid */}
+  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
+
+    {[...Array(5)].map((_, i) => (
+      <div key={i} className="bg-white rounded-xl shadow-md overflow-hidden animate-pulse">
+        
+        {/* Image */}
+        <div className="h-40 w-full bg-gray-300"></div>
+
+        {/* Content */}
+        <div className="p-4 space-y-3">
+
+          {/* Title + Rating */}
+          <div className="flex justify-between items-center">
+            <div className="h-4 w-32 bg-gray-300 rounded"></div>
+            <div className="h-4 w-10 bg-gray-300 rounded"></div>
           </div>
+
+          {/* Cuisine */}
+          <div className="h-3 w-full bg-gray-300 rounded"></div>
+          <div className="h-3 w-3/4 bg-gray-300 rounded"></div>
+
+          {/* Footer */}
+          <div className="flex justify-between mt-2">
+            <div className="h-3 w-20 bg-gray-300 rounded"></div>
+            <div className="h-3 w-24 bg-gray-300 rounded"></div>
+          </div>
+
+        </div>
+      </div>
+    ))}
+
+  </div>
+</div>
         )}
 
         {/* Restaurant View */}

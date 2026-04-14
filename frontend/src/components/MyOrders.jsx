@@ -20,7 +20,7 @@ const MyOrders = () => {
   useEffect(() => {
     // Wait for auth to finish loading
     if (authLoading) return;
-    
+
     if (!user || !user.id) {
       navigate('/');
       return;
@@ -91,7 +91,7 @@ const MyOrders = () => {
 
       if (response.data.success) {
         setOrders(response.data.orders);
-        
+
         // Join socket rooms for all orders to receive real-time updates
         if (socket && response.data.orders.length > 0) {
           response.data.orders.forEach(order => {
@@ -168,17 +168,81 @@ const MyOrders = () => {
     }
     return true;
   });
-console.log("filtered orders: ",filteredOrders)
+  console.log("filtered orders: ", filteredOrders)
   if (loading) {
-    return (
-      <div className="min-h-screen bg-gray-50 pt-24 pb-12">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="text-center py-20">
-            <div className="animate-spin rounded-full h-16 w-16 border-b-2 border-orange-500 mx-auto"></div>
-            <p className="mt-4 text-gray-600">Loading your orders...</p>
-          </div>
-        </div>
+    return (<>
+    <div className="min-h-screen bg-gray-50 pt-24 pb-12">
+      <div className="mb-8 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <h1 className="text-3xl font-bold text-gray-900">My Orders</h1>
+          <p className="text-gray-600 mt-2">Track your orders in real-time</p>
       </div>
+      <div className=" max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 animate-pulse">
+        
+
+        {/* Tabs */}
+        <div className="flex mb-8  bg-gray-200 rounded-lg overflow-hidden">
+          <div className="flex-1 h-12 bg-orange-300"></div>
+          <div className="flex-1 h-12 bg-gray-300"></div>
+          <div className="flex-1 h-12 bg-gray-300"></div>
+        </div>
+
+        {/* Orders */}
+        {[...Array(3)].map((_, i) => (
+          <div key={i} className="bg-white mb-4 rounded-lg shadow p-4 space-y-4">
+
+            {/* Header */}
+            <div className="flex justify-between items-center">
+              <div>
+                <div className="h-4 w-32 bg-gray-300 rounded mb-2"></div>
+                <div className="h-3 w-24 bg-gray-300 rounded"></div>
+              </div>
+              <div className="h-5 w-20 bg-gray-300 rounded-full"></div>
+            </div>
+
+            {/* Divider */}
+            <div className="h-px bg-gray-200"></div>
+
+            {/* Items */}
+            <div className="space-y-2">
+              <div className="h-3 w-40 bg-gray-300 rounded"></div>
+              <div className="h-3 w-20 bg-gray-300 rounded ml-auto"></div>
+            </div>
+
+            {/* Divider */}
+            <div className="h-px bg-gray-200"></div>
+
+            {/* Address */}
+            <div className="space-y-2">
+              <div className="h-3 w-28 bg-gray-300 rounded"></div>
+              <div className="h-3 w-full bg-gray-300 rounded"></div>
+            </div>
+
+            {/* Divider */}
+            <div className="h-px bg-gray-200"></div>
+
+            {/* Rider */}
+            <div className="space-y-2">
+              <div className="h-3 w-28 bg-gray-300 rounded"></div>
+              <div className="h-3 w-32 bg-gray-300 rounded"></div>
+            </div>
+
+            {/* Divider */}
+            <div className="h-px bg-gray-200"></div>
+
+            {/* Total */}
+            <div className="flex justify-between items-center">
+              <div className="h-4 w-24 bg-gray-300 rounded"></div>
+              <div className="h-4 w-16 bg-gray-300 rounded"></div>
+            </div>
+
+            {/* Button */}
+            <div className="h-10 w-full bg-orange-300 rounded"></div>
+
+          </div>
+        ))}
+
+      </div>
+      </div></>
     );
   }
 
@@ -197,11 +261,10 @@ console.log("filtered orders: ",filteredOrders)
             <button
               key={filter}
               onClick={() => setSelectedFilter(filter)}
-              className={`flex-1 py-2 px-4 rounded-md font-medium transition-colors ${
-                selectedFilter === filter
+              className={`flex-1 py-2 px-4 rounded-md font-medium transition-colors ${selectedFilter === filter
                   ? 'bg-orange-500 text-white'
                   : 'text-gray-600 hover:bg-gray-100'
-              }`}
+                }`}
             >
               {filter.charAt(0).toUpperCase() + filter.slice(1)}
             </button>
@@ -287,7 +350,7 @@ console.log("filtered orders: ",filteredOrders)
                     <div className="border-t border-gray-200 pt-4 mb-4">
                       <div className="bg-gradient-to-br from-green-50 to-emerald-50 border border-green-300 rounded-lg p-3 flex gap-4 items-center justify-between">
                         <h4 className="text-xs font-semibold text-green-900 mb-1 flex items-center gap-1">
-                          
+
                           Your Delivery Pin
                         </h4>
                         <p className="text-sm font-bold text-green-700 text-center tracking-widest">
@@ -360,7 +423,7 @@ console.log("filtered orders: ",filteredOrders)
                       Track Order Live
                     </button>
                   )}
-                  
+
                   {/* Rate Order Button (for delivered orders) */}
                   {order.status === 'delivered' && !order.restaurantRating && !order.riderRating && (
                     <button
@@ -380,7 +443,7 @@ console.log("filtered orders: ",filteredOrders)
                       Rate Your Order
                     </button>
                   )}
-                  
+
                   {/* Show if already rated */}
                   {order.status === 'delivered' && (order.restaurantRating || order.riderRating) && (
                     <div className="mt-4 p-3 bg-green-50 border border-green-200 rounded-lg text-center">
@@ -393,7 +456,7 @@ console.log("filtered orders: ",filteredOrders)
           </div>
         )}
       </div>
-      
+
       {/* Rating Modal */}
       {selectedOrderForRating && (
         <RatingModal
