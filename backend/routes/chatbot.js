@@ -362,7 +362,20 @@ const getCartTool = tool(
           pa.push({ type: 'REFRESH_CART' });
           pa.push({ type: 'NAVIGATE', path: '/cart' });
         }
-        return JSON.stringify({ success: true, cart: responseData.cart });
+        // Flatten populated cart so the agent always has an unambiguous
+        // `menuItemId` string at the top level of every cart entry.
+        // This avoids the LLM trying to guess which nested _id to pass
+        // to remove_from_cart / update_cart.
+        const flatCart = (responseData.cart || []).map(item => ({
+          menuItemId:   (item.menuItem?._id || item.menuItem)?.toString(),
+          name:         item.menuItem?.name,
+          price:        item.menuItem?.price,
+          category:     item.menuItem?.category,
+          quantity:     item.quantity,
+          restaurantId: (item.restaurantId?._id || item.restaurantId)?.toString(),
+        }));
+        console.log('🛒 getCartTool flatCart:', JSON.stringify(flatCart));
+        return JSON.stringify({ success: true, count: flatCart.length, cart: flatCart });
       }
       return JSON.stringify({ success: false, message: responseData?.message || 'Failed to fetch cart' });
     } catch (e) {
@@ -371,12 +384,18 @@ const getCartTool = tool(
   },
   {
     name: 'get_cart',
-    description: `Fetches the current user's cart with full item and restaurant details.
-No input needed. Use when user says:
-'show my cart', 'what's in my cart', 'view cart', 'check my order'.`,
+    description: `Fetches the current user's cart with full item details.
+No input needed. Each cart item in the response has these fields:
+- menuItemId: the MongoDB _id string to use with remove_from_cart or update_cart
+- name: item name
+- price: unit price in ₹
+- quantity: current quantity
+- restaurantId: restaurant _id
+Use when user says: 'show my cart', 'what\'s in my cart', 'view cart', 'check my order'.`,
     schema: z.object({}),
   }
 );
+
 
 // ─── 2. Add to Cart (with restaurant conflict guard) ──────────────
 const addToCartTool = tool(
@@ -444,6 +463,10 @@ const removeFromCartTool = tool(
     try {
       const user = config?.configurable?.user;
       const pa = config?.configurable?.pendingActions;
+      console.log(`🗑️ removeFromCartTool: removing menuItemId=${menuItemId}`);
+      if (!menuItemId || typeof menuItemId !== 'string' || menuItemId.length < 10) {
+        return JSON.stringify({ success: false, message: `Invalid menuItemId "${menuItemId}". Call get_cart first to get the correct menuItemId string.` });
+      }
       const req = { user: { id: user._id || user.id }, body: {}, params: { menuItemId }, query: {} };
       const res = buildMockRes();
       await removeFromCartHandler(req, res);
@@ -453,7 +476,14 @@ const removeFromCartTool = tool(
           pa.push({ type: 'REFRESH_CART' });
           pa.push({ type: 'NAVIGATE', path: '/cart' });
         }
-        return JSON.stringify({ success: true, message: responseData.message, cart: responseData.cart });
+        const flatCart = (responseData.cart || []).map(item => ({
+          menuItemId:   (item.menuItem?._id || item.menuItem)?.toString(),
+          name:         item.menuItem?.name,
+          price:        item.menuItem?.price,
+          quantity:     item.quantity,
+          restaurantId: (item.restaurantId?._id || item.restaurantId)?.toString(),
+        }));
+        return JSON.stringify({ success: true, message: responseData.message, cart: flatCart });
       }
       return JSON.stringify({ success: false, message: responseData?.message || 'Failed to remove item from cart' });
     } catch (e) {
@@ -463,13 +493,15 @@ const removeFromCartTool = tool(
   {
     name: 'remove_from_cart',
     description: `Removes a specific item from the user's cart entirely.
-Use when user says: 'remove from cart', 'delete this item', 'I don't want X anymore'.
-If you don't have the menuItem _id, call get_cart first to find it.`,
+Requires: menuItemId — the exact "menuItemId" string from get_cart (NOT the item name, NOT menuItem._id nested object — use the top-level menuItemId field).
+Always call get_cart first, then pass the menuItemId field from the cart item you want to remove.
+Use when user says: 'remove from cart', 'delete this item', 'I don't want X anymore', 'take X out of my cart'.`,
     schema: z.object({
-      menuItemId: z.string().describe('MongoDB _id of the menu item to remove'),
+      menuItemId: z.string().describe('The menuItemId string from get_cart — a 24-character MongoDB _id hex string'),
     }),
   }
 );
+
 
 // ─── 4. Update Cart (bulk replace) ────────────────────────────────
 const updateCartTool = tool(
