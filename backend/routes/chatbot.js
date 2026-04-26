@@ -1,4 +1,4 @@
-import dotenv from "dotenv";
+﻿import dotenv from "dotenv";
 import { dirname, resolve } from "path";
 import { fileURLToPath } from "url";
 import express from 'express';
@@ -1760,7 +1760,7 @@ const getAllRestaurantsTool = tool(
            */
           function restaurantMatchScore(rName, msg) {
             if (!rName || !msg) return 0;
-            const nameLower  = rName.toLowerCase();
+            const nameLower = rName.toLowerCase();
             const nameTokens = nameLower.split(/\s+/).filter(Boolean); // ["kitchenette","foods"]
 
             // Strategy 1: exact substring (fastest, most reliable)
@@ -1768,7 +1768,7 @@ const getAllRestaurantsTool = tool(
 
             // Strategy 2: strip all spaces and compare full name
             const nameNoSpace = nameLower.replace(/\s+/g, '');   // "kitchenette foods" → "kitchettefoods"
-            const msgNoSpace  = msg.replace(/\s+/g, '');         // user msg with no spaces
+            const msgNoSpace = msg.replace(/\s+/g, '');         // user msg with no spaces
             if (nameNoSpace.length > 3 && msgNoSpace.includes(nameNoSpace)) return 0.95;
 
             // Strategy 2b: check each significant name token against the space-stripped
@@ -2249,8 +2249,8 @@ function createAgentForUser(user, apiKey) {
 
 router.post('/chat', async (req, res) => {
   const { user, userInput } = req.body;
-  console.log("--------------user=-----------------", user);
-  console.log("--------------userinput=-----------------", userInput);
+  // console.log("--------------user=-----------------", user);
+  console.log("--------------userinput-----------------", userInput);
 
   if (!userInput) {
     return res.status(400).json({ success: false, message: 'userInput is required' });
