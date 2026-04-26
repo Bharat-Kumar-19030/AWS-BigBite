@@ -238,6 +238,27 @@ export const AppProvider = ({ children }) => {
     fetchCart();
   }, [authUser]); // Run when authUser changes
 
+  // Refresh cart from DB (called by agent after backend cart changes)
+  const refreshCart = async () => {
+    const token = localStorage.getItem('bigbite_token');
+    if (!token) return;
+    try {
+      const response = await fetch(`${SERVER_URL}/api/cart`, {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      });
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success && data.cart) {
+          setCart(data.cart);
+          console.log('🔄 Cart refreshed by agent:', data.cart);
+        }
+      }
+    } catch (error) {
+      console.error('Error refreshing cart:', error);
+    }
+  };
+
   // Save userLocation to localStorage when it changes
   useEffect(() => {
     if (userLocation) {
@@ -430,6 +451,7 @@ export const AppProvider = ({ children }) => {
     removeFromCart,
     updateQuantity,
     clearCart,
+    refreshCart,
     location,
     setLocation,
     userLocation,

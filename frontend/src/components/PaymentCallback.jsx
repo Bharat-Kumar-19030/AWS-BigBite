@@ -66,13 +66,13 @@ const PaymentCallback = () => {
           setPaymentStatus('failed');
           toast.error('Payment failed. Please try again.', { id: 'confirm-order' });
           
-          // Navigate back to cart
+          // Navigate back to cart so the user can retry
           setTimeout(() => {
-            navigate('/');
-          }, 2000);
+            navigate('/cart');
+          }, 2500);
         } else {
           toast.error('Invalid payment callback', { id: 'confirm-order' });
-          navigate('/');
+          navigate('/cart');
         }
       } catch (error) {
         console.error('❌ Payment callback error:', error);
@@ -80,8 +80,8 @@ const PaymentCallback = () => {
         toast.error(error.message || 'Failed to process payment', { id: 'confirm-order' });
         
         setTimeout(() => {
-          navigate('/');
-        }, 2000);
+          navigate('/cart');
+        }, 2500);
       } finally {
         setProcessing(false);
       }

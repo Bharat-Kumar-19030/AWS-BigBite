@@ -6,12 +6,15 @@ import { protect } from '../middleware/auth.js';
 
 const router = express.Router();
 
+// ─────────────────────────────────────────────────────────────────
+//  EXPORTED HANDLER FUNCTIONS  (used by chatbot.js agent tools)
+// ─────────────────────────────────────────────────────────────────
+
 // @desc    Get all menu items for a restaurant
 // @route   GET /api/restaurant/menu
 // @access  Private (Restaurant owner)
-router.get('/menu', protect, async (req, res) => {
+export async function getMenuItemsHandler(req, res) {
   try {
-    // Verify user is a restaurant owner
     if (req.user.role !== 'restaurant') {
       return res.status(403).json({
         success: false,
@@ -29,21 +32,20 @@ router.get('/menu', protect, async (req, res) => {
       data: menuItems,
     });
   } catch (error) {
-    console.error('Error fetching menu items:', error);
+    console.error('❌ Error fetching menu items:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to fetch menu items',
       error: error.message,
     });
   }
-});
+}
 
 // @desc    Create a new menu item
 // @route   POST /api/restaurant/menu
 // @access  Private (Restaurant owner)
-router.post('/menu', protect, async (req, res) => {
+export async function createMenuItemHandler(req, res) {
   try {
-    // Verify user is a restaurant owner
     if (req.user.role !== 'restaurant') {
       return res.status(403).json({
         success: false,
@@ -53,7 +55,6 @@ router.post('/menu', protect, async (req, res) => {
 
     const { name, description, price, category, cuisine, subCategory, image, isVeg, isAvailable } = req.body;
 
-    // Validate required fields
     if (!name || !description || !price || !category || !cuisine || !image) {
       return res.status(400).json({
         success: false,
@@ -61,7 +62,6 @@ router.post('/menu', protect, async (req, res) => {
       });
     }
 
-    // Get restaurant location from user's restaurantDetails
     const user = await User.findById(req.user._id);
     const restaurantLocation = {
       latitude: user.restaurantDetails?.address?.latitude,
@@ -88,21 +88,20 @@ router.post('/menu', protect, async (req, res) => {
       data: menuItem,
     });
   } catch (error) {
-    console.error('Error creating menu item:', error);
+    console.error('❌ Error creating menu item:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to create menu item',
       error: error.message,
     });
   }
-});
+}
 
 // @desc    Update a menu item
 // @route   PUT /api/restaurant/menu/:id
 // @access  Private (Restaurant owner)
-router.put('/menu/:id', protect, async (req, res) => {
+export async function updateMenuItemHandler(req, res) {
   try {
-    // Verify user is a restaurant owner
     if (req.user.role !== 'restaurant') {
       return res.status(403).json({
         success: false,
@@ -119,7 +118,6 @@ router.put('/menu/:id', protect, async (req, res) => {
       });
     }
 
-    // Verify the menu item belongs to this restaurant
     if (menuItem.restaurantId.toString() !== req.user._id.toString()) {
       return res.status(403).json({
         success: false,
@@ -129,7 +127,6 @@ router.put('/menu/:id', protect, async (req, res) => {
 
     const { name, description, price, category, cuisine, subCategory, image, isVeg, isAvailable } = req.body;
 
-    // Update fields
     if (name !== undefined) menuItem.name = name;
     if (description !== undefined) menuItem.description = description;
     if (price !== undefined) menuItem.price = Number(price);
@@ -148,21 +145,20 @@ router.put('/menu/:id', protect, async (req, res) => {
       data: menuItem,
     });
   } catch (error) {
-    console.error('Error updating menu item:', error);
+    console.error('❌ Error updating menu item:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to update menu item',
       error: error.message,
     });
   }
-});
+}
 
 // @desc    Delete a menu item
 // @route   DELETE /api/restaurant/menu/:id
 // @access  Private (Restaurant owner)
-router.delete('/menu/:id', protect, async (req, res) => {
+export async function deleteMenuItemHandler(req, res) {
   try {
-    // Verify user is a restaurant owner
     if (req.user.role !== 'restaurant') {
       return res.status(403).json({
         success: false,
@@ -179,7 +175,6 @@ router.delete('/menu/:id', protect, async (req, res) => {
       });
     }
 
-    // Verify the menu item belongs to this restaurant
     if (menuItem.restaurantId.toString() !== req.user._id.toString()) {
       return res.status(403).json({
         success: false,
@@ -194,21 +189,20 @@ router.delete('/menu/:id', protect, async (req, res) => {
       message: 'Menu item deleted successfully',
     });
   } catch (error) {
-    console.error('Error deleting menu item:', error);
+    console.error('❌ Error deleting menu item:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to delete menu item',
       error: error.message,
     });
   }
-});
+}
 
 // @desc    Toggle kitchen open/close status
 // @route   PUT /api/restaurant/toggle-kitchen
 // @access  Private (Restaurant owner)
-router.put('/toggle-kitchen', protect, async (req, res) => {
+export async function toggleKitchenHandler(req, res) {
   try {
-    // Verify user is a restaurant owner
     if (req.user.role !== 'restaurant') {
       return res.status(403).json({
         success: false,
@@ -217,7 +211,7 @@ router.put('/toggle-kitchen', protect, async (req, res) => {
     }
 
     const user = await User.findById(req.user._id);
-    
+
     if (!user) {
       return res.status(404).json({
         success: false,
@@ -225,17 +219,14 @@ router.put('/toggle-kitchen', protect, async (req, res) => {
       });
     }
 
-    // Toggle kitchen status
     const currentStatus = user.restaurantDetails?.isKitchenOpen ?? true;
-    
-    // If trying to close the kitchen, check for active orders
-    if (currentStatus) { // Currently open, trying to close
-      // Count active orders for this restaurant (use the authenticated user's id)
+
+    if (currentStatus) {
       const activeOrders = await Order.countDocuments({
         restaurant: user._id,
-        status: { $in: ['pending', 'accepted', 'rider_assigned', 'preparing', 'ready', 'picked_up', 'on_the_way'] }
+        status: { $in: ['pending', 'accepted', 'rider_assigned', 'preparing', 'ready', 'picked_up', 'on_the_way'] },
       });
-      
+
       if (activeOrders > 0) {
         return res.status(400).json({
           success: false,
@@ -244,16 +235,13 @@ router.put('/toggle-kitchen', protect, async (req, res) => {
         });
       }
     }
-    
-    // Ensure restaurantDetails exists
+
     if (!user.restaurantDetails) {
       user.restaurantDetails = {};
     }
-    
-    // Update the nested field directly
+
     user.restaurantDetails.isKitchenOpen = !currentStatus;
     user.markModified('restaurantDetails');
-
     await user.save();
 
     res.status(200).json({
@@ -262,33 +250,32 @@ router.put('/toggle-kitchen', protect, async (req, res) => {
       isKitchenOpen: !currentStatus,
     });
   } catch (error) {
-    console.error('Error toggling kitchen status:', error);
+    console.error('❌ Error toggling kitchen status:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to toggle kitchen status',
       error: error.message,
     });
   }
-});
+}
 
-// @desc    Get all restaurants with their menu items (filtered by location)
+// @desc    Get all restaurants filtered by location
 // @route   GET /api/restaurant/all?latitude=LAT&longitude=LON&maxDistance=25
 // @access  Public
-router.get('/all', async (req, res) => {
+export async function getAllRestaurantsHandler(req, res) {
   try {
     const { latitude, longitude, maxDistance = 25 } = req.query;
 
-    // Haversine formula to calculate distance between two coordinates
     const calculateDistance = (lat1, lon1, lat2, lon2) => {
-      const R = 6371; // Earth's radius in km
+      const R = 6371;
       const dLat = (lat2 - lat1) * Math.PI / 180;
       const dLon = (lon2 - lon1) * Math.PI / 180;
-      const a = 
-        Math.sin(dLat/2) * Math.sin(dLat/2) +
+      const a =
+        Math.sin(dLat / 2) * Math.sin(dLat / 2) +
         Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
-        Math.sin(dLon/2) * Math.sin(dLon/2);
-      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-      return R * c; // distance in km
+        Math.sin(dLon / 2) * Math.sin(dLon / 2);
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+      return R * c;
     };
 
     const restaurants = await User.find({ role: 'restaurant' }).select(
@@ -297,9 +284,9 @@ router.get('/all', async (req, res) => {
 
     let restaurantsWithMenu = await Promise.all(
       restaurants.map(async (restaurant) => {
-        const menuItems = await MenuItem.find({ 
+        const menuItems = await MenuItem.find({
           restaurantId: restaurant._id,
-          isAvailable: true 
+          isAvailable: true,
         });
 
         return {
@@ -312,51 +299,48 @@ router.get('/all', async (req, res) => {
           isKitchenOpen: restaurant.restaurantDetails?.isKitchenOpen ?? true,
           restaurantDetails: {
             kitchenName: restaurant.restaurantDetails?.kitchenName || restaurant.name,
-            rating: restaurant.restaurantDetails?.rating || { average: 0, count: 0 }
+            rating: restaurant.restaurantDetails?.rating || { average: 0, count: 0 },
           },
-          menuItems: menuItems,
+          menuItems,
           menuCount: menuItems.length,
         };
       })
     );
 
-    // Filter out restaurants without menu items
     restaurantsWithMenu = restaurantsWithMenu.filter(r => r.menuCount > 0);
 
-    // If location provided, filter by distance
     if (latitude && longitude) {
       const userLat = parseFloat(latitude);
       const userLon = parseFloat(longitude);
       const maxDist = parseFloat(maxDistance);
-      
+
       console.log('🎯 Backend - Filtering restaurants by location:', {
         userCoords: { latitude: userLat, longitude: userLon },
         maxDistance: maxDist,
-        totalRestaurants: restaurantsWithMenu.length
+        totalRestaurants: restaurantsWithMenu.length,
       });
 
       const filteredResults = [];
       restaurantsWithMenu.forEach(restaurant => {
         const restLat = restaurant.address?.latitude;
         const restLon = restaurant.address?.longitude;
-        
-        // Skip restaurants without coordinates
+
         if (!restLat || !restLon) {
           console.log(`❌ ${restaurant.name} - No coordinates:`, restaurant.address);
           return;
         }
-        
+
         const distance = calculateDistance(userLat, userLon, restLat, restLon);
         console.log(`📏 ${restaurant.name} - Distance: ${distance.toFixed(2)}km`, {
           restaurantCoords: { latitude: restLat, longitude: restLon },
-          withinRange: distance <= maxDist
+          withinRange: distance <= maxDist,
         });
-        
+
         if (distance <= maxDist) {
           filteredResults.push(restaurant);
         }
       });
-      
+
       restaurantsWithMenu = filteredResults;
       console.log(`✅ Found ${filteredResults.length} restaurants within ${maxDist}km`);
     }
@@ -367,13 +351,24 @@ router.get('/all', async (req, res) => {
       data: restaurantsWithMenu,
     });
   } catch (error) {
-    console.error('Error fetching restaurants:', error);
+    console.error('❌ Error fetching restaurants:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to fetch restaurants',
       error: error.message,
     });
   }
-});
+}
+
+// ─────────────────────────────────────────────────────────────────
+//  EXPRESS ROUTES  (unchanged — API behaviour stays identical)
+// ─────────────────────────────────────────────────────────────────
+
+router.get('/menu',             protect, getMenuItemsHandler);
+router.post('/menu',            protect, createMenuItemHandler);
+router.put('/menu/:id',         protect, updateMenuItemHandler);
+router.delete('/menu/:id',      protect, deleteMenuItemHandler);
+router.put('/toggle-kitchen',   protect, toggleKitchenHandler);
+router.get('/all',                       getAllRestaurantsHandler);
 
 export default router;

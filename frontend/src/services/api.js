@@ -232,6 +232,31 @@ class ApiService {
       method: 'PUT',
     });
   }
+
+  // ── Chatbot Agent endpoints ──────────────────────────────────────────────────
+
+  // Send message to autonomous agent
+  async chatAgent(message, sessionId = null, latitude = null, longitude = null) {
+    return this.request('/chatbot/agent', {
+      method: 'POST',
+      body: JSON.stringify({ message, sessionId, latitude, longitude }),
+    });
+  }
+
+  // Load last conversation session
+  async getChatSession() {
+    return this.request('/chatbot/session');
+  }
+
+  // Create a new empty session
+  async newChatSession() {
+    return this.request('/chatbot/session/new', { method: 'POST', body: JSON.stringify({}) });
+  }
+
+  // List past sessions (titles)
+  async listChatSessions() {
+    return this.request('/chatbot/sessions');
+  }
 }
 
 export default new ApiService();

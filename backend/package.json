@@ -13,6 +13,9 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@langchain/core": "^1.1.40",
+    "@langchain/google-genai": "^2.1.27",
+    "@langchain/langgraph": "^1.2.8",
     "bcryptjs": "^2.4.3",
     "connect-mongo": "^5.0.0",
     "cookie-parser": "^1.4.6",
@@ -26,6 +29,7 @@
     "node-fetch": "^3.3.2",
     "passport": "^0.7.0",
     "passport-google-oauth20": "^2.0.0",
+    "prompt-sync": "^4.2.0",
     "razorpay": "^2.9.6",
     "socket.io": "^4.8.1",
     "socket.io-client": "^4.8.1",

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useApp } from '../context/AppContext';
 import { useAuth } from '../context/AuthContext';
 import { useSocket } from '../contexts/SocketContext';
@@ -29,6 +29,8 @@ const ViewCart = () => {
   const [tempAddress, setTempAddress] = useState(null);
   const [showWishlistModal, setShowWishlistModal] = useState(false);
   const [wishlistName, setWishlistName] = useState('');
+  const [paymentTabOpen, setPaymentTabOpen] = useState(false); // Show overlay when payment tab is open
+  const paymentTabRef = useRef(null); // Reference to the opened payment tab
 
   // Pricing constants
   const PLATFORM_FEE = 5;
@@ -364,7 +366,41 @@ const ViewCart = () => {
     }
   };
 
-  // Handle Razorpay payment
+  // Handle incoming postMessage from the payment tab
+  const handlePaymentMessage = useCallback((event) => {
+    // Accept messages from the approved payment site
+    const allowedOrigin = 'https://bharat-kumar-19030.github.io';
+    if (event.origin !== allowedOrigin) return;
+
+    const { type, status, ref, razorpay_order_id, razorpay_payment_id, razorpay_signature } = event.data || {};
+    if (type !== 'PAYMENT_RESULT') return;
+
+    console.log('📨 Payment result received from tab:', event.data);
+
+    // Clean up listener & overlay
+    setPaymentTabOpen(false);
+    paymentTabRef.current = null;
+
+    // Build the callback URL and navigate in the main tab
+    const params = new URLSearchParams();
+    params.set('payment', status);
+    params.set('ref', ref);
+    if (status === 'success') {
+      if (razorpay_order_id) params.set('razorpay_order_id', razorpay_order_id);
+      if (razorpay_payment_id) params.set('razorpay_payment_id', razorpay_payment_id);
+      if (razorpay_signature) params.set('razorpay_signature', razorpay_signature);
+    }
+
+    navigate(`/payment-callback?${params.toString()}`);
+  }, [navigate]);
+
+  // Register / clean up the message listener
+  useEffect(() => {
+    window.addEventListener('message', handlePaymentMessage);
+    return () => window.removeEventListener('message', handlePaymentMessage);
+  }, [handlePaymentMessage]);
+
+  // Handle Razorpay payment — open in a new tab instead of redirecting
   const handleOnlinePayment = async (orderData) => {
     try {
       toast.loading('Preparing payment...', { id: 'payment' });
@@ -391,8 +427,9 @@ const ViewCart = () => {
         orderData
       }));
 
-      // Redirect-only flow to approved Razorpay site (pre-verified domain) with encrypted payload
+      // Approved Razorpay site URL
       const approvedSiteUrl = 'https://bharat-kumar-19030.github.io/Learno-Hub/payment.html';
+      // returnUrl is no longer used for redirect — kept in payload for backward compat
       const returnUrl = window.location.origin + '/payment-callback';
 
       const paymentData = {
@@ -403,12 +440,25 @@ const ViewCart = () => {
       };
 
       const encryptedData = await encryptPaymentData(paymentData);
-      const redirectUrl = `${approvedSiteUrl}?data=${encodeURIComponent(encryptedData)}&backend=${encodeURIComponent(SERVER_URL)}`;
+      const paymentUrl = `${approvedSiteUrl}?data=${encodeURIComponent(encryptedData)}&backend=${encodeURIComponent(SERVER_URL)}`;
 
-      console.log('🔄 Redirecting to approved payment site with encrypted data');
-      
-      // Redirect to approved website (Razorpay checkout will open there)
-      window.location.href = redirectUrl;
+      console.log('🪟 Opening payment in a new tab...');
+
+      // Open payment page in a new tab — main tab stays on cart
+      const paymentTab = window.open(paymentUrl, '_blank');
+      paymentTabRef.current = paymentTab;
+
+      if (!paymentTab) {
+        // Popup blocked — fall back to same-tab redirect
+        toast.error('Popup was blocked by your browser. Redirecting in the same tab...', { duration: 3000 });
+        setTimeout(() => { window.location.href = paymentUrl; }, 3000);
+        return;
+      }
+
+      // Close the checkout modal and show the "payment in progress" overlay
+      setShowCheckoutModal(false);
+      setPaymentTabOpen(true);
+      toast.success('Payment page opened in a new tab! Complete your payment there.', { duration: 5000 });
 
     } catch (error) {
       console.error('Error in online payment:', error);
@@ -984,6 +1034,65 @@ const ViewCart = () => {
                   Cancel
                 </button>
               </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Payment In Progress Overlay — shown while payment tab is open */}
+      <AnimatePresence>
+        {paymentTabOpen && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[9999] flex flex-col items-center justify-center"
+            style={{ background: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(6px)' }}
+          >
+            <motion.div
+              initial={{ scale: 0.85, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.85, opacity: 0 }}
+              className="bg-white rounded-2xl shadow-2xl p-10 max-w-sm w-full text-center"
+            >
+              {/* Spinner */}
+              <div className="relative w-24 h-24 mx-auto mb-6">
+                <div className="absolute inset-0 rounded-full border-4 border-orange-100" />
+                <div className="absolute inset-0 rounded-full border-4 border-transparent border-t-orange-500 animate-spin" />
+                <div className="absolute inset-0 flex items-center justify-center text-4xl">💳</div>
+              </div>
+
+              <h2 className="text-2xl font-bold text-gray-900 mb-2">Payment In Progress</h2>
+              <p className="text-gray-500 text-sm mb-6">
+                Complete your payment in the tab that just opened.<br />
+                This page will update automatically once done.
+              </p>
+
+              <div className="flex items-center gap-2 justify-center text-orange-500 text-xs font-medium animate-pulse mb-6">
+                <span className="w-2 h-2 rounded-full bg-orange-500 inline-block" />
+                Waiting for payment confirmation…
+              </div>
+
+              <button
+                onClick={() => {
+                  if (paymentTabRef.current && !paymentTabRef.current.closed) {
+                    paymentTabRef.current.focus();
+                  }
+                }}
+                className="w-full py-3 rounded-xl bg-orange-500 hover:bg-orange-600 text-white font-semibold transition-colors mb-3"
+              >
+                Return to Payment Tab
+              </button>
+
+              <button
+                onClick={() => {
+                  setPaymentTabOpen(false);
+                  paymentTabRef.current = null;
+                }}
+                className="w-full py-2 rounded-xl border border-gray-200 text-gray-500 text-sm hover:bg-gray-50 transition-colors"
+              >
+                Cancel / Go back to cart
+              </button>
             </motion.div>
           </motion.div>
         )}

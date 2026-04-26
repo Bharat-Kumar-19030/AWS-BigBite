@@ -1,12 +1,16 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { toast } from 'react-hot-toast';
 import axios from 'axios';
 import api from '../services/api';
 import { useAuth } from '../context/AuthContext';
-
+import { useApp }  from '../context/AppContext';
+import { useNavigate } from 'react-router-dom';
+const API_URL= import.meta.env.VITE_API_URL;
 const Chatbot = () => {
-  const { user, isAuthenticated } = useAuth();
+  const { user, isAuthenticated, logout } = useAuth();
+  const { clearCart, refreshCart } = useApp();
+  const navigate = useNavigate();
   const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState([
     {
@@ -23,9 +27,13 @@ const Chatbot = () => {
   const [speechTimeout, setSpeechTimeout] = useState(null);
 
   // Order placement state
-  const [orderPlacementState, setOrderPlacementState] = useState(null); // null | 'confirming_items' | 'confirming_address' | 'placing_order'
+  const [orderPlacementState, setOrderPlacementState] = useState(null);
   const [selectedWishlist, setSelectedWishlist] = useState(null);
   const [userWishlists, setUserWishlists] = useState([]);
+
+  // Agent payment tab state
+  const [awaitingPaymentResult, setAwaitingPaymentResult] = useState(false);
+  const agentPaymentTabRef = useRef(null);
 
   const messagesEndRef = useRef(null);
   const recognitionRef = useRef(null);
@@ -613,93 +621,161 @@ You can track your order from the "My Orders" section. The restaurant will start
     return null; // Not an order request
   };
 
-  // Send message to Gemini API
-  const sendMessage = async () => {
-    if (!inputText.trim() || isLoading) return;
+  // ─── Agent Action Protocol ─────────────────────────────────────────
 
-    // Store input and clear immediately to prevent UI lag
-    const currentInput = inputText.trim();
-    setInputText('');
+  // Execute actions returned by the backend agent
+  const executeActions = useCallback(async (actions) => {
+    if (!Array.isArray(actions) || actions.length === 0) return;
+    for (const action of actions) {
+      switch (action.type) {
+        case 'LOGOUT':
+          try {
+            await logout();        // clear AuthContext + localStorage token
+          } catch (e) { console.warn('logout failed', e); }
+          navigate('/login');
+          break;
+        case 'NAVIGATE':
+          navigate(action.path);
+          break;
+        case 'CLEAR_CART':
+          try { await clearCart(); } catch (e) { console.warn('clearCart failed', e); }
+          break;
+        case 'REFRESH_CART':
+          try { await refreshCart(); } catch (e) { console.warn('refreshCart failed', e); }
+          break;
+        case 'SHOW_TOAST':
+          (toast[action.toastType] || toast)(action.message);
+          break;
+        case 'OPEN_PAYMENT_TAB':
+          openAgentPaymentTab(action.paymentUrl);
+          break;
+        default:
+          console.warn('Unknown agent action:', action.type);
+      }
+    }
+  }, [navigate, clearCart, refreshCart]); // eslint-disable-line react-hooks/exhaustive-deps
 
-    console.log('\n========== CHATBOT MESSAGE FLOW ==========');
-    console.log('💬 User Input:', currentInput);
-
-    const userMessage = {
+  // Send PAYMENT_RESULT back to agent automatically after tab closes
+  const sendPaymentResultToAgent = useCallback(async (resultMessage) => {
+    setIsLoading(true);
+    // Add an auto-sent user bubble
+    setMessages(prev => [...prev, {
       role: 'user',
-      content: currentInput,
-      timestamp: new Date()
+      content: resultMessage.startsWith('PAYMENT_RESULT: success') ? '✅ Payment completed!' : '❌ Payment cancelled/failed',
+      timestamp: new Date(),
+      isSystem: true,
+    }]);
+    try {
+      const response = await fetch(`${API_URL}/chatbot/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user, userInput: resultMessage }),
+      });
+      const data = await response.json();
+      const aiResponse = data.success && data.message ? data.message : 'Sorry, could not process payment result.';
+      setMessages(prev => [...prev, { role: 'assistant', content: aiResponse, timestamp: new Date() }]);
+      if (data.actions?.length) await executeActions(data.actions);
+    } catch (err) {
+      console.error('Error sending payment result to agent:', err);
+      setMessages(prev => [...prev, { role: 'assistant', content: 'Sorry, there was an error processing the payment result.', timestamp: new Date() }]);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [user, executeActions]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Open the Razorpay payment page in a new tab on behalf of the agent
+  const openAgentPaymentTab = useCallback((paymentUrl) => {
+    const tab = window.open(paymentUrl, '_blank');
+    agentPaymentTabRef.current = tab;
+    if (!tab) {
+      toast.error('Popup blocked! Please allow popups for payment.');
+      return;
+    }
+    setAwaitingPaymentResult(true);
+    // Add waiting bubble in chat
+    setMessages(prev => [...prev, {
+      role: 'assistant',
+      content: '💳 Payment page opened in a new tab! Please complete your payment there. I\'ll update automatically once it\'s done.',
+      timestamp: new Date(),
+      isPaymentWaiting: true,
+    }]);
+  }, []);
+
+  // Listen for postMessage from the payment tab
+  useEffect(() => {
+    const handleAgentPaymentMessage = (event) => {
+      // Only react if we actually opened a tab
+      if (!agentPaymentTabRef.current) return;
+      if (event.origin !== 'https://bharat-kumar-19030.github.io') return;
+      const { type, status, ref, razorpay_order_id, razorpay_payment_id, razorpay_signature } = event.data || {};
+      if (type !== 'PAYMENT_RESULT') return;
+
+      // Tab is done
+      agentPaymentTabRef.current = null;
+      setAwaitingPaymentResult(false);
+
+      // Remove the waiting bubble
+      setMessages(prev => prev.filter(m => !m.isPaymentWaiting));
+
+      // Build result string for agent
+      let resultMsg;
+      if (status === 'success') {
+        resultMsg = `PAYMENT_RESULT: success | ref=${ref} | razorpay_order_id=${razorpay_order_id} | razorpay_payment_id=${razorpay_payment_id} | razorpay_signature=${razorpay_signature}`;
+      } else {
+        resultMsg = `PAYMENT_RESULT: failed | ref=${ref}`;
+      }
+
+      sendPaymentResultToAgent(resultMsg);
     };
 
-    setMessages(prev => [...prev, userMessage]);
-    setIsLoading(true);
+    window.addEventListener('message', handleAgentPaymentMessage);
+    return () => window.removeEventListener('message', handleAgentPaymentMessage);
+  }, [sendPaymentResultToAgent]);
+
+  // Send message to Gemini API
+  const sendMessage = async () => {
+    
 
     try {
-      // First, check if this is an order placement request
-      console.log('❓ Checking if this is an order placement request...');
-      const orderResponse = await handleOrderPlacement(currentInput);
-      console.log('📍 Order Response:', orderResponse);
-
-      if (orderResponse) {
-        console.log('✅ This is an order-related interaction');
-        // This is an order-related interaction
-        const assistantMessage = {
-          role: 'assistant',
-          content: orderResponse,
-          timestamp: new Date()
-        };
-
-        setMessages(prev => [...prev, assistantMessage]);
-
-        // Speak response if user used voice input
-        if (usedVoiceInput) {
-          speakText(orderResponse);
-          setUsedVoiceInput(false);
-        }
-        setIsLoading(false);
-        console.log('=========================================\n');
-        return;
-      }
-
-      console.log('❌ Not an order request, proceeding to general chat');
-
-      // If we're in order placement flow but message wasn't handled, guide user
-      if (orderPlacementState) {
-        console.log('⚠️ In order placement state:', orderPlacementState);
-        const assistantMessage = {
-          role: 'assistant',
-          content: "I didn't quite understand that. Please type 'yes' to confirm or 'cancel' to stop the order process.",
-          timestamp: new Date()
-        };
-
-        setMessages(prev => [...prev, assistantMessage]);
-
-        if (usedVoiceInput) {
-          speakText(assistantMessage.content);
-          setUsedVoiceInput(false);
-        }
-        setIsLoading(false);
-        console.log('=========================================\n');
-        return;
-      }
-
+      if (inputText.trim() === '') return;
+      
       // Otherwise, use backend API for general questions
       try {
-        console.log('🚀 Sending to backend API /chatbot/chat...');
-        const response = await api.post('/chatbot/chat', { message: currentInput });
-        console.log('📦 Backend Response:', JSON.stringify(response, null, 2));
-        console.log('🔍 Response.success:', response.success);
-        console.log('🔍 Response.message:', response.message);
-        
-        const aiResponse = response.success && response.message ? response.message : 'Sorry, I could not process that request.';
-        console.log('🤖 Final AI Response:', aiResponse);
+        // console.log('🚀 Sending to backend API /chatbot/chat...',inputText);
+        const userMessage = {
+          role: 'user',
+          content: inputText,
+          timestamp: new Date()
+        };
+        const ureq=inputText;
+        setInputText('');
+        setMessages(prev => [...prev, userMessage]);
+        setIsLoading(true);
+        const response = await fetch(`${API_URL}/chatbot/chat`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            user: user,
+            userInput: ureq,
+          })
+        });
+        const data = await response.json();
+        setIsLoading(false);
+        console.log('📦 Backend Response:', JSON.stringify(data, null, 2));
+
+        const aiResponse = data.success && data.message ? data.message : 'Sorry, I could not process that request.';
 
         const assistantMessage = {
           role: 'assistant',
           content: aiResponse,
           timestamp: new Date()
         };
-
         setMessages(prev => [...prev, assistantMessage]);
+
+        // Execute any frontend actions returned by the agent
+        if (data.actions?.length) await executeActions(data.actions);
 
         // Speak response if user used voice input
         if (usedVoiceInput) {
@@ -872,6 +948,25 @@ You can track your order from the "My Orders" section. The restaurant will start
                   </div>
                 </motion.div>
               ))}
+
+              {/* Payment-in-progress bubble (agent-initiated) */}
+              {awaitingPaymentResult && (
+                <div className="flex justify-start">
+                  <div className="bg-amber-50 border border-amber-200 rounded-2xl px-4 py-3 shadow-md max-w-[85%]">
+                    <div className="flex items-center gap-2 text-amber-700 text-sm font-medium mb-1">
+                      <div className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+                      Waiting for payment...
+                    </div>
+                    <p className="text-xs text-amber-600">Complete the payment in the tab that opened. This chat will update automatically.</p>
+                    <button
+                      onClick={() => agentPaymentTabRef.current && agentPaymentTabRef.current.focus()}
+                      className="mt-2 text-xs text-amber-700 underline hover:text-amber-900"
+                    >
+                      Return to payment tab →
+                    </button>
+                  </div>
+                </div>
+              )}
 
               {/* Loading indicator */}
               {isLoading && (

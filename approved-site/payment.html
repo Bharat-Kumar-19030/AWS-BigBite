@@ -424,7 +424,7 @@
         modal: {
           ondismiss: function () {
             console.log('❌ Payment cancelled by user');
-            showMessage('Payment cancelled. Redirecting back...', 'info');
+            showMessage('Payment cancelled. This tab will close shortly...', 'info');
             
             setTimeout(() => {
               redirectBack('failed', null);
@@ -438,7 +438,7 @@
         
         razorpay.on('payment.failed', function (response) {
           console.error('❌ Payment failed:', response.error);
-          showMessage('Payment failed. Redirecting...', 'error');
+          showMessage('Payment failed. This tab will close shortly...', 'error');
           
           setTimeout(() => {
             redirectBack('failed', null);
@@ -474,7 +474,7 @@
         console.log('🔍 Verification response:', verifyData);
 
         if (verifyData.success) {
-          showMessage('Payment verified successfully! Redirecting...', 'success');
+          showMessage('✅ Payment verified! This tab will close shortly...', 'success');
           
           setTimeout(() => {
             redirectBack('success', razorpayResponse);
@@ -494,23 +494,63 @@
     }
 
     function redirectBack(status, razorpayResponse) {
-      let redirectUrl = returnUrl;
-      
-      // Add query parameters
-      const params = new URLSearchParams();
-      params.append('payment', status);
-      params.append('ref', referenceId);
-      
-      if (status === 'success' && razorpayResponse) {
-        params.append('razorpay_order_id', razorpayResponse.razorpay_order_id);
-        params.append('razorpay_payment_id', razorpayResponse.razorpay_payment_id);
-        params.append('razorpay_signature', razorpayResponse.razorpay_signature);
+      // Always try to postMessage to the opener (main BigBite tab).
+      // NEVER navigate this tab to the main website URL — that creates a second tab.
+      if (window.opener && !window.opener.closed) {
+        const message = {
+          type: 'PAYMENT_RESULT',
+          status,           // 'success' | 'failed'
+          ref: referenceId,
+          ...(status === 'success' && razorpayResponse
+            ? {
+                razorpay_order_id: razorpayResponse.razorpay_order_id,
+                razorpay_payment_id: razorpayResponse.razorpay_payment_id,
+                razorpay_signature: razorpayResponse.razorpay_signature,
+              }
+            : {}),
+        };
+
+        // Notify the main tab
+        window.opener.postMessage(message, '*');
+        console.log('📨 Sent payment result to opener:', message);
+      } else {
+        // opener unavailable (rare) — log but do NOT redirect inside this tab
+        console.warn('⚠️ window.opener unavailable; main tab may need a manual refresh.');
       }
-      
-      const finalUrl = `${redirectUrl}?${params.toString()}`;
-      console.log('🔄 Redirecting to:', finalUrl);
-      
-      window.location.href = finalUrl;
+
+      // Always close this tab — success, failure, or cancellation.
+      // Give the user 1.5 s to read the status message before the tab closes.
+      setTimeout(() => {
+        window.close();
+
+        // window.close() only works if the tab was script-opened.
+        // If it is still open after 500 ms, show a manual-close prompt.
+        setTimeout(() => {
+          if (!window.closed) {
+            showManualClosePrompt();
+          }
+        }, 500);
+      }, 1500);
+    }
+
+    function showManualClosePrompt() {
+      // Render a friendly "please close this tab" message in the payment container
+      const container = document.getElementById('paymentContainer');
+      if (!container) return;
+      container.innerHTML = `
+        <div class="payment-header">
+          <h2>✅ Payment Complete</h2>
+          <p>You can now close this tab and return to BigBite.</p>
+        </div>
+        <div class="payment-body" style="text-align:center;padding:40px 30px;">
+          <div style="font-size:60px;margin-bottom:20px;">🎉</div>
+          <p style="color:#374151;font-size:16px;margin-bottom:24px;">
+            Your payment has been processed.<br>
+            Please <strong>close this tab</strong> to return to the main page.
+          </p>
+          <button onclick="window.close()" class="btn-primary">Close This Tab</button>
+        </div>
+      `;
     }
 
     function showMessage(message, type) {

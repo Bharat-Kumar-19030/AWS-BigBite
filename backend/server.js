@@ -621,7 +621,7 @@ io.on('connection', (socket) => {
 });
 
 // Helper function to notify nearby riders
-async function notifyNearbyRiders(order) {
+export async function notifyNearbyRiders(order) {
   try {
     console.log('🔔 notifyNearbyRiders called for order:', order._id);
     

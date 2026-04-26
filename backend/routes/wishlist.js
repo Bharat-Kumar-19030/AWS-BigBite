@@ -6,10 +6,14 @@ import { protect } from '../middleware/auth.js';
 
 const router = express.Router();
 
+// ─────────────────────────────────────────────────────────────────
+//  EXPORTED HANDLER FUNCTIONS  (used by chatbot.js agent tools)
+// ─────────────────────────────────────────────────────────────────
+
 // @desc    Get all wishlists for a user
 // @route   GET /api/wishlist
 // @access  Private
-router.get('/', protect, async (req, res) => {
+export async function getWishlistsHandler(req, res) {
   try {
     console.log('📝 Fetching wishlists for user:', req.user.id);
     const userId = req.user.id;
@@ -34,12 +38,12 @@ router.get('/', protect, async (req, res) => {
       error: error.message
     });
   }
-});
+}
 
 // @desc    Create new wishlist from cart
 // @route   POST /api/wishlist
 // @access  Private
-router.post('/', protect, async (req, res) => {
+export async function createWishlistHandler(req, res) {
   try {
     console.log('📝 Creating wishlist with body:', req.body);
     const { name, restaurant, items } = req.body;
@@ -93,12 +97,12 @@ router.post('/', protect, async (req, res) => {
       error: error.message
     });
   }
-});
+}
 
 // @desc    Update wishlist name
 // @route   PATCH /api/wishlist/:id/name
 // @access  Private
-router.patch('/:id/name', protect, async (req, res) => {
+export async function updateWishlistNameHandler(req, res) {
   try {
     const { id } = req.params;
     const { name } = req.body;
@@ -112,7 +116,7 @@ router.patch('/:id/name', protect, async (req, res) => {
     }
 
     const wishlist = await Wishlist.findOne({ _id: id, user: userId });
-    
+
     if (!wishlist) {
       return res.status(404).json({
         success: false,
@@ -137,19 +141,19 @@ router.patch('/:id/name', protect, async (req, res) => {
       error: error.message
     });
   }
-});
+}
 
 // @desc    Add item to wishlist
 // @route   POST /api/wishlist/:id/items
 // @access  Private
-router.post('/:id/items', protect, async (req, res) => {
+export async function addItemToWishlistHandler(req, res) {
   try {
     const { id } = req.params;
     const { menuItem, name, price, quantity } = req.body;
     const userId = req.user.id;
 
     const wishlist = await Wishlist.findOne({ _id: id, user: userId });
-    
+
     if (!wishlist) {
       return res.status(404).json({
         success: false,
@@ -167,7 +171,7 @@ router.post('/:id/items', protect, async (req, res) => {
     }
 
     // Check if item already exists
-    const existingItem = wishlist.items.find(item => 
+    const existingItem = wishlist.items.find(item =>
       item.menuItem.toString() === menuItem
     );
 
@@ -194,12 +198,12 @@ router.post('/:id/items', protect, async (req, res) => {
       error: error.message
     });
   }
-});
+}
 
 // @desc    Update item quantity in wishlist
 // @route   PATCH /api/wishlist/:id/items/:itemId
 // @access  Private
-router.patch('/:id/items/:itemId', protect, async (req, res) => {
+export async function updateItemQuantityHandler(req, res) {
   try {
     const { id, itemId } = req.params;
     const { quantity } = req.body;
@@ -213,7 +217,7 @@ router.patch('/:id/items/:itemId', protect, async (req, res) => {
     }
 
     const wishlist = await Wishlist.findOne({ _id: id, user: userId });
-    
+
     if (!wishlist) {
       return res.status(404).json({
         success: false,
@@ -246,18 +250,18 @@ router.patch('/:id/items/:itemId', protect, async (req, res) => {
       error: error.message
     });
   }
-});
+}
 
 // @desc    Remove item from wishlist
 // @route   DELETE /api/wishlist/:id/items/:itemId
 // @access  Private
-router.delete('/:id/items/:itemId', protect, async (req, res) => {
+export async function removeItemFromWishlistHandler(req, res) {
   try {
     const { id, itemId } = req.params;
     const userId = req.user.id;
 
     const wishlist = await Wishlist.findOne({ _id: id, user: userId });
-    
+
     if (!wishlist) {
       return res.status(404).json({
         success: false,
@@ -282,18 +286,18 @@ router.delete('/:id/items/:itemId', protect, async (req, res) => {
       error: error.message
     });
   }
-});
+}
 
 // @desc    Delete wishlist
 // @route   DELETE /api/wishlist/:id
 // @access  Private
-router.delete('/:id', protect, async (req, res) => {
+export async function deleteWishlistHandler(req, res) {
   try {
     const { id } = req.params;
     const userId = req.user.id;
 
     const wishlist = await Wishlist.findOneAndDelete({ _id: id, user: userId });
-    
+
     if (!wishlist) {
       return res.status(404).json({
         success: false,
@@ -313,12 +317,12 @@ router.delete('/:id', protect, async (req, res) => {
       error: error.message
     });
   }
-});
+}
 
 // @desc    Get single wishlist by ID
 // @route   GET /api/wishlist/:id
 // @access  Private
-router.get('/:id', protect, async (req, res) => {
+export async function getWishlistByIdHandler(req, res) {
   try {
     const { id } = req.params;
     const userId = req.user.id;
@@ -326,7 +330,7 @@ router.get('/:id', protect, async (req, res) => {
     const wishlist = await Wishlist.findOne({ _id: id, user: userId })
       .populate('restaurant', 'restaurantDetails')
       .populate('items.menuItem', 'name price image category');
-    
+
     if (!wishlist) {
       return res.status(404).json({
         success: false,
@@ -346,6 +350,19 @@ router.get('/:id', protect, async (req, res) => {
       error: error.message
     });
   }
-});
+}
+
+// ─────────────────────────────────────────────────────────────────
+//  EXPRESS ROUTES  (unchanged — API behaviour stays identical)
+// ─────────────────────────────────────────────────────────────────
+
+router.get('/',                       protect, getWishlistsHandler);
+router.post('/',                      protect, createWishlistHandler);
+router.patch('/:id/name',             protect, updateWishlistNameHandler);
+router.post('/:id/items',             protect, addItemToWishlistHandler);
+router.patch('/:id/items/:itemId',    protect, updateItemQuantityHandler);
+router.delete('/:id/items/:itemId',   protect, removeItemFromWishlistHandler);
+router.delete('/:id',                 protect, deleteWishlistHandler);
+router.get('/:id',                    protect, getWishlistByIdHandler);
 
 export default router;

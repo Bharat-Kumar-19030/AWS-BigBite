@@ -342,4 +342,87 @@ router.get(
   }
 );
 
+// ─── Exported handlers for the AI agent (chatbot.js) ─────────────
+// These are pure (req, res) functions that mirror the route logic so the
+// agent can call them via the same buildMockRes() pattern used in other routes.
+
+export async function getMeHandler(req, res) {
+  try {
+    const user = await User.findById(req.user.id);
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+    const token = jwt.sign(
+      { id: user._id, role: user.role },
+      process.env.JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+    res.status(200).json({
+      success: true,
+      token,
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        phone: user.phone,
+        role: user.role,
+        avatar: user.avatar,
+        address: user.address,
+        restaurantDetails: user.restaurantDetails,
+        riderDetails: user.riderDetails,
+        authProvider: user.authProvider,
+        isEmailVerified: user.isEmailVerified,
+        isPhoneVerified: user.isPhoneVerified,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Error fetching user data' });
+  }
+}
+
+export async function updateProfileHandler(req, res) {
+  try {
+    const { name, phone, address, avatar, restaurantDetails, riderDetails } = req.body;
+    const fieldsToUpdate = {};
+    if (name)              fieldsToUpdate.name              = name;
+    if (phone)             fieldsToUpdate.phone             = phone;
+    if (address)           fieldsToUpdate.address           = address;
+    if (avatar)            fieldsToUpdate.avatar            = avatar;
+    if (restaurantDetails) fieldsToUpdate.restaurantDetails = restaurantDetails;
+    if (riderDetails) {
+      fieldsToUpdate.riderDetails = riderDetails;
+      fieldsToUpdate.$set = { riderDetails };
+    }
+    const user = await User.findByIdAndUpdate(req.user.id, fieldsToUpdate, {
+      new: true,
+      runValidators: true,
+    });
+    if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+    res.status(200).json({
+      success: true,
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        phone: user.phone,
+        role: user.role,
+        avatar: user.avatar,
+        address: user.address,
+        restaurantDetails: user.restaurantDetails,
+        riderDetails: user.riderDetails,
+      },
+    });
+  } catch (error) {
+    if (error.name === 'ValidationError') {
+      const messages = Object.values(error.errors).map((e) => e.message);
+      return res.status(400).json({ success: false, message: messages[0] });
+    }
+    res.status(500).json({ success: false, message: 'Error updating profile' });
+  }
+}
+
+export async function logoutHandler(req, res) {
+  res.status(200).json({ success: true, message: 'Logged out successfully' });
+}
+
 export default router;
