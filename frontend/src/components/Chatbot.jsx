@@ -25,6 +25,10 @@ const Chatbot = () => {
   const [usedVoiceInput, setUsedVoiceInput] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [speechTimeout, setSpeechTimeout] = useState(null);
+  const [autoSendCountdown, setAutoSendCountdown] = useState(null); // 3,2,1 or null
+  const voiceAutoSendTimerRef = useRef(null);  // holds the setTimeout id
+  const voiceTranscriptRef = useRef('');        // latest captured transcript
+  const sendMessageRef = useRef(null);          // always-current sendMessage ref (avoids stale closure)
 
   // Order placement state
   const [orderPlacementState, setOrderPlacementState] = useState(null);
@@ -100,8 +104,12 @@ const Chatbot = () => {
       };
 
       recognitionRef.current.onresult = (event) => {
-        const transcript = event.results[0][0].transcript;
+        const transcript = Array.from(event.results)
+          .map(r => r[0].transcript)
+          .join(' ')
+          .trim();
         setInputText(transcript);
+        voiceTranscriptRef.current = transcript;
         setUsedVoiceInput(true);
         toast.success('Voice captured!', { id: 'voice-recognition' });
       };
@@ -120,6 +128,32 @@ const Chatbot = () => {
 
       recognitionRef.current.onend = () => {
         setIsListening(false);
+
+        // Only start auto-send countdown if we actually captured something
+        if (!voiceTranscriptRef.current.trim()) return;
+
+        // Cancel any previous countdown
+        if (voiceAutoSendTimerRef.current) clearTimeout(voiceAutoSendTimerRef.current);
+
+        // 3-second countdown then auto-send
+        let remaining = 3;
+        setAutoSendCountdown(remaining);
+
+        const tick = () => {
+          remaining -= 1;
+          if (remaining > 0) {
+            setAutoSendCountdown(remaining);
+            voiceAutoSendTimerRef.current = setTimeout(tick, 1000);
+          } else {
+            setAutoSendCountdown(null);
+            voiceAutoSendTimerRef.current = null;
+            // Trigger send if we still have the transcript in the input
+            if (voiceTranscriptRef.current.trim()) {
+              sendMessageRef.current?.();
+            }
+          }
+        };
+        voiceAutoSendTimerRef.current = setTimeout(tick, 1000);
       };
     }
 
@@ -732,9 +766,16 @@ You can track your order from the "My Orders" section. The restaurant will start
     return () => window.removeEventListener('message', handleAgentPaymentMessage);
   }, [sendPaymentResultToAgent]);
 
-  // Send message to Gemini API
+  // Keep sendMessageRef always pointing at the latest sendMessage
+  // (so the voice auto-send timer never captures a stale closure)
   const sendMessage = async () => {
-    
+    // Cancel any pending auto-send timer the moment the user sends manually
+    if (voiceAutoSendTimerRef.current) {
+      clearTimeout(voiceAutoSendTimerRef.current);
+      voiceAutoSendTimerRef.current = null;
+    }
+    setAutoSendCountdown(null);
+    voiceTranscriptRef.current = '';
 
     try {
       if (inputText.trim() === '') return;
@@ -805,6 +846,8 @@ You can track your order from the "My Orders" section. The restaurant will start
       console.log('=========================================\n');
     }
   };
+  // Keep the ref in sync so the voice timer always calls the freshest version
+  sendMessageRef.current = sendMessage;
 
   // Handle input key press
   const handleKeyPress = (e) => {
@@ -984,13 +1027,45 @@ You can track your order from the "My Orders" section. The restaurant will start
               <div ref={messagesEndRef} />
             </div>
 
+            {/* Auto-send countdown badge (voice input) */}
+            {autoSendCountdown !== null && (
+              <div className="mx-4 mb-1 flex items-center gap-2 px-3 py-1.5 bg-orange-50 border border-orange-200 rounded-xl text-sm text-orange-700">
+                <span className="text-base">🎙️</span>
+                <span className="flex-1">
+                  Sending in <strong>{autoSendCountdown}</strong>s… or type to cancel
+                </span>
+                <button
+                  onClick={() => {
+                    if (voiceAutoSendTimerRef.current) {
+                      clearTimeout(voiceAutoSendTimerRef.current);
+                      voiceAutoSendTimerRef.current = null;
+                    }
+                    setAutoSendCountdown(null);
+                    voiceTranscriptRef.current = '';
+                  }}
+                  className="text-orange-500 hover:text-orange-700 font-semibold text-xs px-2 py-0.5 rounded-lg border border-orange-300 hover:border-orange-500 transition"
+                >
+                  Cancel
+                </button>
+              </div>
+            )}
+
             {/* Input Area */}
             <div className="p-4  border-t border-gray-200  ">
               <div className="flex items-center gap-2 ">
                 <div className="flex-1 relative items-center">
                   <textarea
                     value={inputText}
-                    onChange={(e) => setInputText(e.target.value)}
+                    onChange={(e) => {
+                      setInputText(e.target.value);
+                      // If the user edits the field manually, cancel auto-send
+                      if (voiceAutoSendTimerRef.current) {
+                        clearTimeout(voiceAutoSendTimerRef.current);
+                        voiceAutoSendTimerRef.current = null;
+                        setAutoSendCountdown(null);
+                        voiceTranscriptRef.current = '';
+                      }
+                    }}
                     onKeyPress={handleKeyPress}
                     placeholder="Type your message..."
                     rows="1"
