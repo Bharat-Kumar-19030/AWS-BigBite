@@ -1754,35 +1754,72 @@ const getAllRestaurantsTool = tool(
            * Returns a number in [0, 1]:  1.0 = perfect match, 0 = no match.
            *
            * Strategies (tried in order of confidence):
-           *  1. Exact substring  – "kitchenette foods" appears verbatim
-           *  2. Spaces-stripped  – "kitchenette" matches "kitchen ette" after removing spaces
-           *  3. Word overlap     – fraction of name-words found anywhere in the user message
+           *  1. Exact substring  - "kitchenette foods" appears verbatim
+           *  2. Spaces-stripped  - "kitchettefoods" matches after removing spaces
+           *  2b. Per-token noSpace - each token checked in space-stripped msg
+           *  3. Word overlap     - fraction of name-words found in the message
+           *  4. Jaro fuzzy       - catches single-char typos ("kithenette" ~ "kitchenette")
            */
           function restaurantMatchScore(rName, msg) {
             if (!rName || !msg) return 0;
             const nameLower = rName.toLowerCase();
-            const nameTokens = nameLower.split(/\s+/).filter(Boolean); // ["kitchenette","foods"]
+            const nameTokens = nameLower.split(/\s+/).filter(Boolean);
 
-            // Strategy 1: exact substring (fastest, most reliable)
+            // Strategy 1: exact substring
             if (msg.includes(nameLower)) return 1.0;
 
-            // Strategy 2: strip all spaces and compare full name
-            const nameNoSpace = nameLower.replace(/\s+/g, '');   // "kitchenette foods" → "kitchettefoods"
-            const msgNoSpace = msg.replace(/\s+/g, '');         // user msg with no spaces
+            // Strategy 2: full name with all spaces stripped
+            const nameNoSpace = nameLower.replace(/\s+/g, '');
+            const msgNoSpace = msg.replace(/\s+/g, '');
             if (nameNoSpace.length > 3 && msgNoSpace.includes(nameNoSpace)) return 0.95;
 
-            // Strategy 2b: check each significant name token against the space-stripped
-            // user message — catches "kitchen ette" matching "kitchenette"
+            // Strategy 2b: each significant name token in space-stripped message.
+            // Only return early if the score meets the threshold - otherwise fall
+            // through so Strategy 3/4 can still rescue a partial match.
             const tokenMatchesNoSpace = nameTokens.filter(tok => tok.length > 3 && msgNoSpace.includes(tok));
-            if (tokenMatchesNoSpace.length >= Math.ceil(nameTokens.length / 2)) {
-              return 0.85 * (tokenMatchesNoSpace.length / nameTokens.length);
+            const noSpaceScore = 0.85 * (tokenMatchesNoSpace.length / nameTokens.length);
+            if (tokenMatchesNoSpace.length >= Math.ceil(nameTokens.length / 2) && noSpaceScore >= 0.5) {
+              return noSpaceScore;
             }
 
-            // Strategy 3: word-overlap — what fraction of the restaurant's words
-            // appear somewhere in the user message (normal OR space-stripped)?
-            const matchedWords = nameTokens.filter(tok => tok.length > 2 && (msg.includes(tok) || msgNoSpace.includes(tok)));
+            // Strategy 3: word-overlap (normal msg OR space-stripped)
+            const matchedWords = nameTokens.filter(tok =>
+              tok.length > 2 && (msg.includes(tok) || msgNoSpace.includes(tok))
+            );
             const overlapRatio = matchedWords.length / nameTokens.length;
-            return overlapRatio;
+            if (overlapRatio >= 0.5) return overlapRatio;
+
+            // Strategy 4: Jaro fuzzy - catches typos like "kithenette" vs "kitchenette"
+            // (Jaro similarity ~0.97, well above 0.88 threshold). No external deps.
+            const userWords = msg.split(/[\s,!?.]+/).filter(w => w.length > 3);
+            const fuzzyMatched = nameTokens.filter(tok => {
+              if (tok.length <= 3) return false;
+              return userWords.some(w => {
+                if (tok === w) return true;
+                const sl = tok.length, tl = w.length;
+                const md = Math.floor(Math.max(sl, tl) / 2) - 1;
+                if (md < 0) return false;
+                const sm = new Array(sl).fill(false), tm = new Array(tl).fill(false);
+                let m = 0;
+                for (let i = 0; i < sl; i++) {
+                  for (let j = Math.max(0, i - md); j < Math.min(i + md + 1, tl); j++) {
+                    if (tm[j] || tok[i] !== w[j]) continue;
+                    sm[i] = tm[j] = true; m++; break;
+                  }
+                }
+                if (!m) return false;
+                let k = 0, tr = 0;
+                for (let i = 0; i < sl; i++) {
+                  if (!sm[i]) continue;
+                  while (!tm[k]) k++;
+                  if (tok[i] !== w[k]) tr++;
+                  k++;
+                }
+                return (m / sl + m / tl + (m - tr / 2) / m) / 3 >= 0.88;
+              });
+            });
+            const fuzzyRatio = fuzzyMatched.length / nameTokens.length;
+            return fuzzyRatio >= 0.5 ? 0.75 * fuzzyRatio : 0;
           }
 
           let bestMatch = null;
