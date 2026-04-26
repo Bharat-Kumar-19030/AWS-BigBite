@@ -1,4 +1,4 @@
-﻿import dotenv from "dotenv";
+import dotenv from "dotenv";
 import { dirname, resolve } from "path";
 import { fileURLToPath } from "url";
 import express from 'express';
@@ -115,7 +115,14 @@ IMPORTANT RULES (STRICT):
 2. NEVER emit a text message to the user mid-flow. Do NOT say things like "Please wait...", "I will now...", "One moment...", "Let me do X...", or "Processing..." BEFORE completing all required tool calls. These partial messages cause the agent to halt and wait for user input, breaking the flow. Only speak AFTER all tools for the current task have been called and results received.
 3. If a task requires multiple sequential tool calls (e.g. create_pending_order → initiate_online_payment), call ALL of them in the same turn before producing your final reply to the user.
 4. Exception: If you genuinely need to ask the user a question (missing required info, confirmation before irreversible action), you may speak — but ONLY after finishing any tools that do not require that info.
-5. NEVER show your internal reasoning, planning steps, or chain-of-thought to the user. Do NOT output "## Step 1", "## Step 2", "Step 3:", "No function call needed", or any other meta-commentary about what you are doing. Think silently and only output the final, clean reply.
+5. CRITICAL — NEVER expose your internal reasoning, planning, or step-by-step process to the user under ANY circumstances. Your messages to the user must be the FINAL clean result only — never a narration of what you are doing. Specifically forbidden examples that you must NEVER output:
+   - "## Step 1: Confirm Cart Contents"
+   - "## Step 2: Calculate Pricing"
+   - "Step 3: Create Pending Order"
+   - "## Step 4: Initiate Online Payment"
+   - "## Step 5: Wait for Payment Result"
+   - Any heading, bullet, or sentence that describes an internal action YOU are taking rather than information FOR the user.
+   Think silently. Output ONLY the final result the user needs to see.
 6. NEVER output raw JSON, objects, or data structures in your reply to the user. Do NOT write things like {"clear": true}, {"success": false}, or any bracket/brace notation. Your response to the user must ALWAYS be plain natural language sentences or formatted lists — never raw code or JSON.
 7. When a tool returns a conflict, warning, or error (e.g. cart has items from a different restaurant), translate the result into a clear, friendly natural-language message. For example, instead of echoing {"clear": true}, say: "Your cart already has items from **[Restaurant Name]**. Would you like me to clear the cart so I can add items from the new restaurant instead? 🛒"
 
@@ -2369,6 +2376,20 @@ router.post('/chat', async (req, res) => {
 
       console.log("🤖 BigBite:", finalMessage);
       console.log("⚡ Actions:", pendingActions);
+
+      // ── Strip any leaked step-headers from the final message ─────────────
+      // Safety net in case the LLM still emits "## Step N:" lines despite the
+      // system prompt rule.  Removes those lines from the user-facing reply.
+      const stepHeaderRe = /^#{1,3}\s*Step\s+\d+[:\s].*/im;
+      if (stepHeaderRe.test(finalMessage)) {
+        console.warn('⚠️  Stripping leaked step-headers from agent reply.');
+        finalMessage = finalMessage
+          .split('\n')
+          .filter(line => !/^#{1,3}\s*Step\s+\d+/i.test(line.trim()))
+          .join('\n')
+          .replace(/\n{3,}/g, '\n\n') // collapse runs of blank lines
+          .trim();
+      }
 
       // ── Detect text function-call leak ────────────────────────────────────
       // Some LLM responses emit the tool call as plain text instead of a
