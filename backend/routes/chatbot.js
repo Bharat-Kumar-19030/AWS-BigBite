@@ -2310,15 +2310,23 @@ function getToolsForUser(user) {
   return TOOLS[role] ?? TOOLS.customer;
 }
 
-function createAgentForUser(user, apiKey) {
+function createAgentForUser(user, apiKey, userContextLine) {
   const tools = getToolsForUser(user);
   console.log(`🔧 Creating agent for role: ${user?.role || 'guest'} with ${tools.length} tools (key: ...${apiKey.slice(-6)})`);
+
+  // ── Inject user context into the system prompt so it is stable across turns.
+  // Previously this was prepended to every HumanMessage, which made each turn
+  // look like a brand-new session to the LLM and broke multi-turn conversations
+  // (e.g. replying "COD" to "How would you like to pay?" was treated as a new query).
+  const dynamicSystemPrompt = userContextLine
+    ? `${systemPrompt}\n\n[CURRENT USER CONTEXT — refreshed each request, do NOT ask for this info again]\n${userContextLine}`
+    : systemPrompt;
 
   return createReactAgent({
     llm: createModel(apiKey),
     tools,
     checkpointSaver: checkpointer,
-    messageModifier: systemPrompt,
+    messageModifier: dynamicSystemPrompt,
     recursionLimit: 25,
   });
 }
@@ -2343,7 +2351,12 @@ router.post('/chat', async (req, res) => {
     });
   }
 
-  // Build a rich address context line so the agent never has to call get_me just for the address
+  // ── Build user context for the system prompt (NOT for HumanMessage). ─────
+  // Injecting [USER STATUS] into every HumanMessage caused the LLM to treat
+  // each turn as a brand-new session, breaking multi-turn conversations where
+  // the user replies to a counter-question (e.g. "COD" after "How to pay?").
+  // The fix: put user context in the system prompt (messageModifier) which is
+  // stable per-request but does not pollute the conversation history messages.
   const addrObj = user?.address || {};
   const hasCoords = addrObj.latitude != null && addrObj.longitude != null;
   const addressLine = hasCoords
@@ -2352,7 +2365,8 @@ router.post('/chat', async (req, res) => {
       ? `address: ${[addrObj.street, addrObj.city, addrObj.state, addrObj.zipCode].filter(Boolean).join(', ')} | coordinates: NOT SET`
       : 'address: NOT SET | coordinates: NOT SET';
 
-  const contextualInput = `[USER STATUS: Authenticated | userId: ${userId} | role: ${user?.role || 'customer'} | ${addressLine}]\n\n${userInput}`;
+  // This line is injected into the system prompt, not the user message.
+  const userContextLine = `USER STATUS: Authenticated | userId: ${userId} | role: ${user?.role || 'customer'} | ${addressLine}`;
 
   try {
     // ─── callWithGroqRotation wraps the entire agent run. ─────────────────────
@@ -2373,13 +2387,14 @@ router.post('/chat', async (req, res) => {
         recursionLimit: 25,
       };
 
-      const agent = createAgentForUser(user, apiKey);
+      // Pass userContextLine so it's embedded in the system prompt (not HumanMessage)
+      const agent = createAgentForUser(user, apiKey, userContextLine);
 
       let finalMessage = "";
       let stepIndex = 0;
 
       const stream = await agent.stream(
-        { messages: [new HumanMessage(contextualInput)] },
+        { messages: [new HumanMessage(userInput)] },
         { ...config, streamMode: "updates" }
       );
 
