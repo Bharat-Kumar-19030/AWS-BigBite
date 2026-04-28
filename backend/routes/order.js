@@ -19,9 +19,9 @@ const calculateDistance = (lat1, lon1, lat2, lon2) => {
   const a =
     Math.sin(dLat / 2) * Math.sin(dLat / 2) +
     Math.cos((lat1 * Math.PI) / 180) *
-      Math.cos((lat2 * Math.PI) / 180) *
-      Math.sin(dLon / 2) *
-      Math.sin(dLon / 2);
+    Math.cos((lat2 * Math.PI) / 180) *
+    Math.sin(dLon / 2) *
+    Math.sin(dLon / 2);
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   return R * c;
 };
@@ -67,7 +67,7 @@ export async function createPendingOrderHandler(req, res) {
     }
 
     const restaurant = await User.findById(restaurantId);
-    
+
     if (!restaurant || restaurant.role !== 'restaurant') {
       return res.status(404).json({
         success: false,
@@ -121,7 +121,7 @@ export async function confirmOrderHandler(req, res) {
     console.log('✅ Confirming order after payment:', orderId);
 
     const order = await Order.findById(orderId);
-    
+
     if (!order) {
       return res.status(404).json({
         success: false,
@@ -130,7 +130,7 @@ export async function confirmOrderHandler(req, res) {
     }
 
     const payment = await Payment.findOne({ razorpay_order_id });
-    
+
     if (!payment || payment.status !== 'SUCCESS') {
       return res.status(400).json({
         success: false,
@@ -184,7 +184,7 @@ export async function placeOrderHandler(req, res) {
     } = req.body;
 
     console.log('📦 Received order request:', { customerId, restaurantId, items: items?.length, deliveryAddress, paymentMethod, pricing });
-    
+
     if (paymentMethod === 'online') {
       if (!razorpay_order_id) {
         return res.status(400).json({
@@ -194,7 +194,7 @@ export async function placeOrderHandler(req, res) {
       }
 
       const payment = await Payment.findOne({ razorpay_order_id });
-      
+
       if (!payment) {
         return res.status(400).json({
           success: false,
@@ -211,7 +211,7 @@ export async function placeOrderHandler(req, res) {
 
       console.log('✅ Payment verified for order placement:', razorpay_order_id);
     }
-    
+
     console.log('💰 PRICING DATA RECEIVED FROM FRONTEND:');
     console.log('   Subtotal:', pricing?.subtotal);
     console.log('   Delivery Fee:', pricing?.deliveryFee);
@@ -229,7 +229,7 @@ export async function placeOrderHandler(req, res) {
 
     const restaurant = await User.findById(restaurantId);
     console.log('🔍 Found user:', { id: restaurant?._id, role: restaurant?.role });
-    
+
     if (!restaurant || restaurant.role !== 'restaurant') {
       console.log('❌ Restaurant validation failed');
       return res.status(404).json({
@@ -239,9 +239,9 @@ export async function placeOrderHandler(req, res) {
     }
 
     console.log('✅ Restaurant validated:', restaurant.restaurantDetails?.kitchenName);
-    
+
     const isKitchenOpen = restaurant.restaurantDetails?.isKitchenOpen ?? true;
-    
+
     if (!isKitchenOpen) {
       console.log('❌ Restaurant kitchen is closed');
       return res.status(400).json({
@@ -249,11 +249,11 @@ export async function placeOrderHandler(req, res) {
         message: 'This restaurant is currently closed and not accepting orders',
       });
     }
-    
-    console.log('📍 Delivery coordinates received:', { 
-      latitude: deliveryAddress.latitude, 
+
+    console.log('📍 Delivery coordinates received:', {
+      latitude: deliveryAddress.latitude,
       longitude: deliveryAddress.longitude,
-      fullAddress: deliveryAddress.fullAddress 
+      fullAddress: deliveryAddress.fullAddress
     });
 
     const orderData = {
@@ -297,7 +297,7 @@ export async function placeOrderHandler(req, res) {
       { path: 'restaurant', select: 'restaurantDetails' },
       { path: 'items.menuItem', select: 'name price image category' },
     ]);
-    
+
     const orderSocketData = mapOrderToSocketData(order);
     activeOrdersPool.set(order._id.toString(), orderSocketData);
 
@@ -512,11 +512,11 @@ export async function verifyDeliveryPinHandler(req, res) {
           rider.riderDetails.todayEarnings = 0;
           rider.riderDetails.lastEarningsReset = today;
         }
-        
+
         rider.riderDetails.totalDeliveries = (rider.riderDetails.totalDeliveries || 0) + 1;
         rider.riderDetails.totalEarnings = (rider.riderDetails.totalEarnings || 0) + (order.riderEarnings || 0);
         rider.riderDetails.todayEarnings = (rider.riderDetails.todayEarnings || 0) + (order.riderEarnings || 0);
-        
+
         await rider.save();
         console.log(`💰 Rider ${rider.name} earned ₹${order.riderEarnings}. Today: ₹${rider.riderDetails.todayEarnings}, Total: ₹${rider.riderDetails.totalEarnings}`);
       }
@@ -620,7 +620,7 @@ export async function updateOrderStatusHandler(req, res) {
         break;
       case 'delivered':
         order.deliveredAt = new Date();
-        
+
         if (order.rider) {
           const rider = await User.findById(order.rider);
           if (rider && rider.role === 'rider') {
@@ -630,11 +630,11 @@ export async function updateOrderStatusHandler(req, res) {
               rider.riderDetails.todayEarnings = 0;
               rider.riderDetails.lastEarningsReset = today;
             }
-            
+
             rider.riderDetails.totalDeliveries = (rider.riderDetails.totalDeliveries || 0) + 1;
             rider.riderDetails.totalEarnings = (rider.riderDetails.totalEarnings || 0) + (order.riderEarnings || 0);
             rider.riderDetails.todayEarnings = (rider.riderDetails.todayEarnings || 0) + (order.riderEarnings || 0);
-            
+
             await rider.save();
           }
         }
@@ -709,7 +709,7 @@ export async function getCustomerOrdersHandler(req, res) {
   try {
     const { customerId } = req.params;
 
-    const orders = await Order.find({ 
+    const orders = await Order.find({
       customer: customerId,
       status: { $ne: 'pending_payment' }
     })
@@ -741,9 +741,9 @@ export async function getAvailableOrdersHandler(req, res) {
   try {
     let { latitude, longitude } = req.query;
     const MAX_DISTANCE_KM = 1000;
-    
+
     console.log(`📦 Fetching available orders from database`);
-    
+
     if ((!latitude || !longitude) && req.user) {
       const riderData = activeRidersPool.get(req.user.toString());
       if (riderData && riderData.coordinates) {
@@ -752,7 +752,7 @@ export async function getAvailableOrdersHandler(req, res) {
       }
     }
 
-    const orders = await Order.find({ 
+    const orders = await Order.find({
       status: { $in: ['awaiting_rider', 'accepted'] },
       rider: null
     })
@@ -932,7 +932,18 @@ export async function getRestaurantOrdersHandler(req, res) {
   try {
     const { restaurantId } = req.params;
 
-    const orders = await Order.find({ restaurant: restaurantId })
+    const orders = await Order.find({
+      restaurant: restaurantId,
+      // Exclude ghost orders from failed/abandoned ONLINE payments:
+      //  - status:'pending_payment' + online  → user started but never completed payment
+      //  - paymentStatus:'failed'  + online   → payment was explicitly declined/cancelled
+      // COD orders are NEVER excluded (paymentStatus='pending' is normal for COD —
+      // it just means cash hasn't been collected yet, which the restaurant expects).
+      $nor: [
+        { status: 'pending_payment', paymentMethod: 'online' },
+        { paymentStatus: 'failed',   paymentMethod: 'online' },
+      ],
+    })
       .populate([
         { path: 'customer', select: 'name phone' },
         { path: 'rider', select: 'name phone' },
@@ -959,18 +970,18 @@ export async function getRestaurantOrdersHandler(req, res) {
 //  EXPRESS ROUTES (unchanged — API behaviour stays identical)
 // ─────────────────────────────────────────────────────────────────
 
-router.post('/pending',                  createPendingOrderHandler);
-router.post('/:orderId/confirm',         confirmOrderHandler);
-router.post('/',                         placeOrderHandler);
-router.post('/:id/accept',               riderAcceptOrderHandler);
-router.post('/:id/verify-pickup-pin',    verifyPickupPinHandler);
-router.post('/:id/verify-delivery-pin',  verifyDeliveryPinHandler);
-router.patch('/:id/status',              updateOrderStatusHandler);
-router.get('/customer/:customerId',      getCustomerOrdersHandler);
-router.get('/available',                 getAvailableOrdersHandler);
-router.get('/rider/:riderId',            getRiderOrdersHandler);
-router.get('/:id',                       getOrderByIdHandler);
-router.patch('/:id/rider-location',      updateRiderLocationHandler);
-router.get('/restaurant/:restaurantId',  getRestaurantOrdersHandler);
+router.post('/pending', createPendingOrderHandler);
+router.post('/:orderId/confirm', confirmOrderHandler);
+router.post('/', placeOrderHandler);
+router.post('/:id/accept', riderAcceptOrderHandler);
+router.post('/:id/verify-pickup-pin', verifyPickupPinHandler);
+router.post('/:id/verify-delivery-pin', verifyDeliveryPinHandler);
+router.patch('/:id/status', updateOrderStatusHandler);
+router.get('/customer/:customerId', getCustomerOrdersHandler);
+router.get('/available', getAvailableOrdersHandler);
+router.get('/rider/:riderId', getRiderOrdersHandler);
+router.get('/:id', getOrderByIdHandler);
+router.patch('/:id/rider-location', updateRiderLocationHandler);
+router.get('/restaurant/:restaurantId', getRestaurantOrdersHandler);
 
 export default router;

@@ -215,7 +215,7 @@ ORDER PLACEMENT FLOW — MANDATORY SEQUENCE:
       → The payment tab opens automatically in user's browser.
    e. IMMEDIATELY after calling initiate_online_payment, show this EXACT format (fill in real values):
 
-      "Your order reference is #[last 8 chars of orderId].
+      "Your order reference is #[last 8 chars of orderId in UPPERCASE, e.g. #15400D56].
 
       Here's the price breakup for your order:
       [list each cart item as: • [Name] ([qty] piece/pieces) — ₹[price × qty]]
@@ -231,7 +231,8 @@ ORDER PLACEMENT FLOW — MANDATORY SEQUENCE:
 
 ORDER REFERENCE FORMAT RULE:
 - NEVER show the full MongoDB _id (e.g. 69ed129c7ce8efc915400d56).
-- Always abbreviate it as #[last 8 characters], e.g. #15400d56.
+- Always abbreviate it as #[last 8 characters in UPPERCASE], e.g. #15400D56.
+- This must match exactly what the "My Orders" page shows: order._id.slice(-8).toUpperCase().
 - Apply this rule everywhere you mention an order ID to the user.
 
 4. When a message starts with "PAYMENT_RESULT:" parse it:
@@ -343,7 +344,142 @@ function toBool(val, fallback = undefined) {
   return fallback;
 }
 
-// ------------------cart tools-----------------------
+// ─── Order Formatters ─────────────────────────────────────────────────────────────
+// fmtOrderRef: converts any MongoDB _id to the #LAST8UPPER display format
+// that matches MyOrders.jsx: order._id.slice(-8).toUpperCase()
+function fmtOrderRef(id) {
+  if (!id) return null;
+  return `#${id.toString().slice(-8).toUpperCase()}`;
+}
+
+// slimOrder: strips a populated MongoDB order doc down to only the fields the
+// LLM actually needs. A full populated order can be 3,000–8,000 tokens; a
+// slimmed one is ~100–200 tokens. This is the #1 fix for context-window overflow.
+function slimOrder(order) {
+  if (!order) return null;
+  const o = typeof order.toObject === 'function' ? order.toObject() : { ...order };
+  return {
+    orderRef:      fmtOrderRef(o._id),          // display reference e.g. #15400D56
+    orderId:       o._id?.toString(),            // full _id for tool calls (navigate, confirm)
+    status:        o.status,
+    paymentMethod: o.paymentMethod,
+    paymentStatus: o.paymentStatus,
+    items: (o.items || []).map(i => ({
+      name:     i.name || i.menuItem?.name || '?',
+      price:    i.price,
+      quantity: i.quantity,
+    })),
+    subtotal:      o.subtotal,
+    deliveryFee:   o.deliveryFee,
+    platformFee:   o.platformFee,
+    gst:           o.gst,
+    totalAmount:   o.totalAmount,
+    restaurantName: o.restaurant?.restaurantDetails?.kitchenName
+                 || o.restaurant?.name
+                 || (typeof o.restaurant === 'string' ? o.restaurant : null),
+    riderName:   o.rider?.name   || null,
+    riderPhone:  o.rider?.phone  || null,
+    pickupPin:   o.pickupPin   || null,   // rider needs this for pickup
+    deliveryPin: o.deliveryPin || null,   // rider needs this for delivery
+    createdAt:   o.createdAt,
+  };
+}
+
+// fmtOrder wraps slimOrder — keeps orderRef stamping and slimming in one call.
+function fmtOrder(order) {
+  return slimOrder(order);
+}
+
+// fmtOrders applies fmtOrder over an array, capping at 15 to avoid token floods.
+function fmtOrders(orders) {
+  if (!Array.isArray(orders)) return orders;
+  return orders.slice(0, 15).map(slimOrder);
+}
+
+// ─── Agent Cache ───────────────────────────────────────────────────────────────────
+// Keyed by "userId:role". The same compiled graph instance is reused across
+// requests so MemorySaver's thread_id state is properly carried forward.
+// Root cause of context forgetting: creating a new agent instance every request
+// means the graph starts fresh even though the checkpoint has history.
+const agentCache = new Map();
+
+function evictAgentCache(userId, role) {
+  const key = `${userId}:${role || 'customer'}`;
+  if (agentCache.delete(key)) {
+    console.log(`🗑️  Agent cache evicted for ${key}`);
+  }
+}
+
+// ─── Token estimator & history trimmer ────────────────────────────────────────────
+// Rough estimate: ~4 chars per token for English + JSON.
+function estimateTokens(val) {
+  const s = typeof val === 'string' ? val : JSON.stringify(val ?? '');
+  return Math.ceil(s.length / 4);
+}
+
+// Proactively trim the oldest messages in the MemorySaver checkpoint BEFORE
+// sending the next request, keeping total history under `maxTokens`.
+// This prevents the 413 "request too large" error from Groq.
+async function trimOldMessagesIfNeeded(userId, maxTokens = 10000) {
+  try {
+    const state = await checkpointer.get({ configurable: { thread_id: userId } });
+    if (!state) return;
+    const msgs = state.channel_values?.messages ?? [];
+    if (!msgs.length) return;
+
+    let total = msgs.reduce((s, m) => {
+      const c = typeof m.content === 'string' ? m.content : JSON.stringify(m.content ?? '');
+      return s + estimateTokens(c);
+    }, 0);
+
+    if (total <= maxTokens) return;
+    console.warn(`⚠️  History ~${total} tokens. Trimming oldest messages…`);
+
+    const trimmed = [...msgs];
+    // Always keep at least the last 6 messages (3 turns) for immediate context.
+    while (total > maxTokens && trimmed.length > 6) {
+      const removed = trimmed.shift();
+      const rc = typeof removed.content === 'string' ? removed.content : JSON.stringify(removed.content ?? '');
+      total -= estimateTokens(rc);
+    }
+
+    await checkpointer.put(
+      { configurable: { thread_id: userId } },
+      { ...state, channel_values: { ...state.channel_values, messages: trimmed } },
+      {}
+    );
+    console.log(`✅ Trimmed to ${trimmed.length} messages (~${total} tokens).`);
+  } catch (e) {
+    console.warn('⚠️  trimOldMessagesIfNeeded failed (non-fatal):', e.message);
+  }
+}
+
+
+// ─── Output Sanitizer ───────────────────────────────────────────────────────────────
+// Strips internal reasoning / implementation-plan content that the LLM leaks
+// despite system-prompt rules. Applied to finalMessage before it reaches the user.
+//
+// Catches:
+//  • Step-header lines: "## Step 1:", "### Step 2 — Confirm cart", "**Step 3:**"
+//  • Plan preamble lines: "I will now...", "Let me...", "My plan is:", etc.
+//  • Tool-narration lines: "Now calling get_cart...", "Calling update_cart..."
+const PLAN_LINE_RE = /^(#{1,4}\s*step\s*\d|\*{1,2}step\s*\d|step\s+\d+[:\-\s]|i will now|i'll now|now i('ll| will)|let me (now|first|check|look|start|call|invoke|fetch|get|use|see)|i'm going to|i am going to|first,?\s+(i'll|i will|let me)|next,?\s+(i'll|i will)|then,?\s+(i'll|i will)|my plan (is|:)|here('s| is) (my|the) plan|here('s| is) what i('ll| will) do|to (do|complete|handle|process) this,?\s+(i'll|i will)|i need to (first|now|start|begin)|now,?\s+i('ll| will) (call|invoke|use|fetch)|calling\s+[a-z_]|using\s+[a-z_]+\s+(tool|function))/i;
+
+function sanitizeReply(text) {
+  if (!text || typeof text !== 'string') return text;
+
+  const cleaned = text
+    .split('\n')
+    .filter(line => !PLAN_LINE_RE.test(line.trim()))
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n') // collapse excess blank lines
+    .trim();
+
+  if (cleaned !== text) {
+    console.warn('⚠️  sanitizeReply: stripped leaked plan/reasoning lines from agent reply.');
+  }
+  return cleaned;
+}
 
 // ─── Cart Tools ───────────────────────────────────────────────────
 
@@ -367,11 +503,11 @@ const getCartTool = tool(
         // This avoids the LLM trying to guess which nested _id to pass
         // to remove_from_cart / update_cart.
         const flatCart = (responseData.cart || []).map(item => ({
-          menuItemId:   (item.menuItem?._id || item.menuItem)?.toString(),
-          name:         item.menuItem?.name,
-          price:        item.menuItem?.price,
-          category:     item.menuItem?.category,
-          quantity:     item.quantity,
+          menuItemId: (item.menuItem?._id || item.menuItem)?.toString(),
+          name: item.menuItem?.name,
+          price: item.menuItem?.price,
+          category: item.menuItem?.category,
+          quantity: item.quantity,
           restaurantId: (item.restaurantId?._id || item.restaurantId)?.toString(),
         }));
         console.log('🛒 getCartTool flatCart:', JSON.stringify(flatCart));
@@ -477,10 +613,10 @@ const removeFromCartTool = tool(
           pa.push({ type: 'NAVIGATE', path: '/cart' });
         }
         const flatCart = (responseData.cart || []).map(item => ({
-          menuItemId:   (item.menuItem?._id || item.menuItem)?.toString(),
-          name:         item.menuItem?.name,
-          price:        item.menuItem?.price,
-          quantity:     item.quantity,
+          menuItemId: (item.menuItem?._id || item.menuItem)?.toString(),
+          name: item.menuItem?.name,
+          price: item.menuItem?.price,
+          quantity: item.quantity,
           restaurantId: (item.restaurantId?._id || item.restaurantId)?.toString(),
         }));
         return JSON.stringify({ success: true, message: responseData.message, cart: flatCart });
@@ -741,7 +877,7 @@ const placeOrderTool = tool(
     if (statusCode === 201 && responseData?.success) {
       // COD: navigate to orders list so user sees their new order
       if (Array.isArray(pa)) pa.push({ type: 'NAVIGATE', path: '/orders' });
-      return JSON.stringify({ success: true, message: responseData.message, order: responseData.order });
+      return JSON.stringify({ success: true, message: responseData.message, order: fmtOrder(responseData.order) });
     }
     return JSON.stringify({ success: false, message: responseData?.message || "Failed to place order" });
   },
@@ -800,7 +936,7 @@ const getCustomerOrdersTool = tool(
     const { statusCode, responseData } = res.getData();
     if (statusCode === 200 && responseData?.success) {
       if (Array.isArray(pa)) pa.push({ type: 'NAVIGATE', path: '/orders' });
-      return JSON.stringify({ success: true, orders: responseData.orders });
+      return JSON.stringify({ success: true, orders: fmtOrders(responseData.orders) });
     }
     return JSON.stringify({ success: false, message: responseData?.message || "Failed to fetch orders" });
   },
@@ -828,7 +964,7 @@ const getOrderByIdTool = tool(
     await getOrderByIdHandler(req, res);
     const { statusCode, responseData } = res.getData();
     if (statusCode === 200 && responseData?.success) {
-      return JSON.stringify({ success: true, order: responseData.order });
+      return JSON.stringify({ success: true, order: fmtOrder(responseData.order) });
     }
     return JSON.stringify({ success: false, message: responseData?.message || "Order not found" });
   },
@@ -856,7 +992,7 @@ const updateOrderStatusTool = tool(
     await updateOrderStatusHandler(req, res);
     const { statusCode, responseData } = res.getData();
     if (statusCode === 200 && responseData?.success) {
-      return JSON.stringify({ success: true, message: responseData.message, order: responseData.order });
+      return JSON.stringify({ success: true, message: responseData.message, order: fmtOrder(responseData.order) });
     }
     return JSON.stringify({ success: false, message: responseData?.message || "Failed to update status" });
   },
@@ -917,7 +1053,7 @@ const riderAcceptOrderTool = tool(
     await riderAcceptOrderHandler(req, res);
     const { statusCode, responseData } = res.getData();
     if (statusCode === 200 && responseData?.success) {
-      return JSON.stringify({ success: true, message: responseData.message, order: responseData.order });
+      return JSON.stringify({ success: true, message: responseData.message, order: fmtOrder(responseData.order) });
     }
     return JSON.stringify({ success: false, message: responseData?.message || "Failed to accept order" });
   },
@@ -974,7 +1110,7 @@ const verifyPickupPinTool = tool(
     await verifyPickupPinHandler(req, res);
     const { statusCode, responseData } = res.getData();
     if (statusCode === 200 && responseData?.success) {
-      return JSON.stringify({ success: true, message: responseData.message, order: responseData.order });
+      return JSON.stringify({ success: true, message: responseData.message, order: fmtOrder(responseData.order) });
     }
     return JSON.stringify({ success: false, message: responseData?.message || "Invalid pickup PIN" });
   },
@@ -1003,7 +1139,7 @@ const verifyDeliveryPinTool = tool(
     await verifyDeliveryPinHandler(req, res);
     const { statusCode, responseData } = res.getData();
     if (statusCode === 200 && responseData?.success) {
-      return JSON.stringify({ success: true, message: responseData.message, order: responseData.order });
+      return JSON.stringify({ success: true, message: responseData.message, order: fmtOrder(responseData.order) });
     }
     return JSON.stringify({ success: false, message: responseData?.message || "Invalid delivery PIN" });
   },
@@ -1193,7 +1329,7 @@ const getRestaurantOrdersTool = tool(
     await getRestaurantOrdersHandler(req, res);
     const { statusCode, responseData } = res.getData();
     if (statusCode === 200 && responseData?.success) {
-      return JSON.stringify({ success: true, orders: responseData.orders });
+      return JSON.stringify({ success: true, orders: fmtOrders(responseData.orders) });
     }
     return JSON.stringify({ success: false, message: responseData?.message || "Failed to fetch restaurant orders" });
   },
@@ -1221,7 +1357,13 @@ const createPendingOrderTool = tool(
     await createPendingOrderHandler(req, res);
     const { statusCode, responseData } = res.getData();
     if (statusCode === 201 && responseData?.success) {
-      return JSON.stringify({ success: true, order: responseData.order });
+      const order = responseData.order;
+      return JSON.stringify({
+        success: true,
+        orderId: order._id,            // full _id needed for initiate_online_payment
+        orderRef: fmtOrderRef(order._id), // #LAST8UPPER for showing to the user
+        totalAmount: order.totalAmount,
+      });
     }
     return JSON.stringify({ success: false, message: responseData?.message || "Failed to create pending order" });
   },
@@ -1271,9 +1413,8 @@ const confirmOrderTool = tool(
     await confirmOrderHandler(req, res);
     const { statusCode, responseData } = res.getData();
     if (statusCode === 200 && responseData?.success) {
-      // Navigate to live tracking page for this specific order
       if (Array.isArray(pa)) pa.push({ type: 'NAVIGATE', path: `/track-order/${orderId}` });
-      return JSON.stringify({ success: true, order: responseData.order });
+      return JSON.stringify({ success: true, order: fmtOrder(responseData.order) });
     }
     return JSON.stringify({ success: false, message: responseData?.message || "Failed to confirm order" });
   },
@@ -2310,30 +2451,39 @@ function getToolsForUser(user) {
   return TOOLS[role] ?? TOOLS.customer;
 }
 
-function createAgentForUser(user, apiKey, userContextLine) {
-  const tools = getToolsForUser(user);
-  console.log(`🔧 Creating agent for role: ${user?.role || 'guest'} with ${tools.length} tools (key: ...${apiKey.slice(-6)})`);
+function getOrCreateAgent(userId, user, apiKey, userContextLine) {
+  const role     = user?.role || 'customer';
+  const cacheKey = `${userId}:${role}`;
 
-  // ── Inject user context into the system prompt so it is stable across turns.
-  // Previously this was prepended to every HumanMessage, which made each turn
-  // look like a brand-new session to the LLM and broke multi-turn conversations
-  // (e.g. replying "COD" to "How would you like to pay?" was treated as a new query).
+  if (agentCache.has(cacheKey)) {
+    console.log(`♻️  Reusing cached agent for ${cacheKey}`);
+    return agentCache.get(cacheKey);
+  }
+
+  const tools = getToolsForUser(user);
+  console.log(`🔧 Creating new agent for ${cacheKey} (${tools.length} tools, key: ...${apiKey.slice(-6)})`);
+
+  // The system prompt is static per session; user context is injected once at
+  // cache-creation time. The address rarely changes mid-session so this is fine.
+  // If the user's role or address changes materially, the cache entry is evicted.
   const dynamicSystemPrompt = userContextLine
-    ? `${systemPrompt}\n\n[CURRENT USER CONTEXT — refreshed each request, do NOT ask for this info again]\n${userContextLine}`
+    ? `${systemPrompt}\n\n[CURRENT USER CONTEXT]\n${userContextLine}`
     : systemPrompt;
 
-  return createReactAgent({
-    llm: createModel(apiKey),
+  const agent = createReactAgent({
+    llm:             createModel(apiKey),
     tools,
     checkpointSaver: checkpointer,
     messageModifier: dynamicSystemPrompt,
-    recursionLimit: 25,
+    recursionLimit:  25,
   });
+
+  agentCache.set(cacheKey, agent);
+  return agent;
 }
 
 router.post('/chat', async (req, res) => {
   const { user, userInput } = req.body;
-  // console.log("--------------user=-----------------", user);
   console.log("--------------userinput-----------------", userInput);
 
   if (!userInput) {
@@ -2341,22 +2491,16 @@ router.post('/chat', async (req, res) => {
   }
 
   const isAuthenticated = !!(user?._id || user?.id);
-  const userId = isAuthenticated ? (user._id || user.id).toString() : "guest";
+  const userId = isAuthenticated ? (user._id || user.id).toString() : 'guest';
 
   if (!isAuthenticated) {
     return res.json({
       success: true,
-      message: "You need to be logged in to do that. Please sign in or create an account to continue.",
+      message: 'You need to be logged in to do that. Please sign in or create an account to continue.',
       actions: [],
     });
   }
 
-  // ── Build user context for the system prompt (NOT for HumanMessage). ─────
-  // Injecting [USER STATUS] into every HumanMessage caused the LLM to treat
-  // each turn as a brand-new session, breaking multi-turn conversations where
-  // the user replies to a counter-question (e.g. "COD" after "How to pay?").
-  // The fix: put user context in the system prompt (messageModifier) which is
-  // stable per-request but does not pollute the conversation history messages.
   const addrObj = user?.address || {};
   const hasCoords = addrObj.latitude != null && addrObj.longitude != null;
   const addressLine = hasCoords
@@ -2365,37 +2509,38 @@ router.post('/chat', async (req, res) => {
       ? `address: ${[addrObj.street, addrObj.city, addrObj.state, addrObj.zipCode].filter(Boolean).join(', ')} | coordinates: NOT SET`
       : 'address: NOT SET | coordinates: NOT SET';
 
-  // This line is injected into the system prompt, not the user message.
   const userContextLine = `USER STATUS: Authenticated | userId: ${userId} | role: ${user?.role || 'customer'} | ${addressLine}`;
 
+  // Proactively trim history before sending to keep token usage under control.
+  // This prevents the 413 "context too large" error that clears all memory.
+  await trimOldMessagesIfNeeded(userId, 10000);
+
   try {
-    // ─── callWithGroqRotation wraps the entire agent run. ─────────────────────
-    // On 429 or tool_use_failed (400) it rotates to the next Groq key and
-    // retries up to (total keys) times.  After all keys are exhausted the
-    // last error is re-thrown and caught by the outer catch below.
     const result = await callWithGroqRotation(async (apiKey) => {
-      // Fresh pendingActions per attempt so we don't double-push on retry
       const pendingActions = [];
 
       const config = {
         configurable: {
-          thread_id: userId,
-          user: user,
-          pendingActions,       // ← tools push actions here during the run
-          lastUserInput: userInput, // ← used by getAllRestaurantsTool for smart nav
+          thread_id:     userId,
+          user:          user,
+          pendingActions,
+          lastUserInput: userInput,
         },
         recursionLimit: 25,
       };
 
-      // Pass userContextLine so it's embedded in the system prompt (not HumanMessage)
-      const agent = createAgentForUser(user, apiKey, userContextLine);
+      // Reuse the cached agent — this is critical for context continuity.
+      // A new agent instance created per-request loses the MemorySaver thread
+      // state even though the checkpoint still exists, because the compiled
+      // graph's internal bookkeeping is separate from the stored messages.
+      const agent = getOrCreateAgent(userId, user, apiKey, userContextLine);
 
-      let finalMessage = "";
-      let stepIndex = 0;
+      let finalMessage = '';
+      let stepIndex    = 0;
 
       const stream = await agent.stream(
         { messages: [new HumanMessage(userInput)] },
-        { ...config, streamMode: "updates" }
+        { ...config, streamMode: 'updates' }
       );
 
       for await (const chunk of stream) {
@@ -2405,11 +2550,12 @@ router.post('/chat', async (req, res) => {
           const messages = nodeData?.messages ?? [];
           for (const m of messages) {
             const type = m._getType?.() ?? typeof m;
-            const content = typeof m.content === "string"
+            const content = typeof m.content === 'string'
               ? m.content.slice(0, 300)
               : JSON.stringify(m.content).slice(0, 300);
             console.log(`  [${type}]: ${content}`);
             if (m.tool_calls?.length) {
+
               for (const tc of m.tool_calls) {
                 console.log(`  🔧 Tool call: ${tc.name}`, JSON.stringify(tc.args).slice(0, 200));
               }
@@ -2424,19 +2570,14 @@ router.post('/chat', async (req, res) => {
       console.log("🤖 BigBite:", finalMessage);
       console.log("⚡ Actions:", pendingActions);
 
-      // ── Strip any leaked step-headers from the final message ─────────────
-      // Safety net in case the LLM still emits "## Step N:" lines despite the
-      // system prompt rule.  Removes those lines from the user-facing reply.
-      const stepHeaderRe = /^#{1,3}\s*Step\s+\d+[:\s].*/im;
-      if (stepHeaderRe.test(finalMessage)) {
-        console.warn('⚠️  Stripping leaked step-headers from agent reply.');
-        finalMessage = finalMessage
-          .split('\n')
-          .filter(line => !/^#{1,3}\s*Step\s+\d+/i.test(line.trim()))
-          .join('\n')
-          .replace(/\n{3,}/g, '\n\n') // collapse runs of blank lines
-          .trim();
-      }
+      // ── Backup sanitizer: catch any 24-char hex ID that the LLM still leaked
+      finalMessage = finalMessage.replace(
+        /#?([0-9a-f]{24})\b/gi,
+        (_, id) => `#${id.slice(-8).toUpperCase()}`
+      );
+
+      // ── Strip leaked implementation-plan / reasoning lines ────────────────
+      finalMessage = sanitizeReply(finalMessage);
 
       // ── Detect text function-call leak ────────────────────────────────────
       // Some LLM responses emit the tool call as plain text instead of a
@@ -2448,7 +2589,9 @@ router.post('/chat', async (req, res) => {
       // to the next key and retry so a different model run handles the request.
       const TEXT_FUNC_CALL_RE = /^\s*[a-z_][a-z0-9_]*\s*\([^)]*\)\s*$/i;
       if (TEXT_FUNC_CALL_RE.test(finalMessage)) {
-        console.warn(`⚠️  Model emitted tool call as plain text: "${finalMessage.trim()}". Treating as tool_use_failed — rotating key.`);
+        console.warn(`⚠️  Model emitted tool call as plain text: "${finalMessage.trim()}". Evicting cache & rotating key.`);
+        // Evict the cached agent so the retry creates a fresh one bound to the new key.
+        evictAgentCache(userId, user?.role);
         const fakeErr = new Error('tool_use_failed: model emitted function call as plain text');
         fakeErr.status = 400;
         fakeErr.error = { error: { code: 'tool_use_failed', message: 'text function call detected' } };
@@ -2466,17 +2609,18 @@ router.post('/chat', async (req, res) => {
     // Clear this user's MemorySaver checkpoint so the next message starts fresh,
     // then return a graceful message instead of a raw 500.
     if (err instanceof GroqTokenOverflowError) {
-      console.warn(`🗑️  Clearing MemorySaver checkpoint for thread "${userId}" due to token overflow.`);
+      console.warn(`🗑️  Token overflow for "${userId}" — clearing checkpoint & evicting agent cache.`);
       try {
-        // MemorySaver stores state keyed by { configurable: { thread_id } }.
-        // Writing an empty checkpoint effectively resets the conversation.
         await checkpointer.put(
           { configurable: { thread_id: userId } },
           { v: 1, ts: new Date().toISOString(), id: userId, channel_values: { messages: [] }, channel_versions: {}, versions_seen: {}, pending_sends: [] },
           {}
         );
+        // Evict the cached agent so the next request starts with a fresh instance
+        // that isn't confused by the now-empty checkpoint state.
+        evictAgentCache(userId, user?.role);
       } catch (clearErr) {
-        console.error('❌ Failed to clear MemorySaver checkpoint:', clearErr.message);
+        console.error('❌ Failed to clear checkpoint:', clearErr.message);
       }
       return res.json({
         success: true,
