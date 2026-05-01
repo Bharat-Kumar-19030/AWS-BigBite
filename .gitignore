@@ -2,6 +2,7 @@ approved-site/
 # Dependencies
 node_modules/
 *.md
+!README.md
 # Environment variables
 .env
 .env.local
