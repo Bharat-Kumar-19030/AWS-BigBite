@@ -1,0 +1,40 @@
+name: Deploy to EC2
+
+on:
+  push:
+    branches:
+      - main # Triggers the workflow when you push to the main branch
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+
+    - name: Deploy using ssh
+      uses: appleboy/ssh-action@master
+      with:
+        host: ${{ secrets.EC2_HOST }}
+        username: ${{ secrets.EC2_USERNAME }}
+        key: ${{ secrets.EC2_PRIVATE_KEY }}
+        port: 22
+        script: |
+          # Go to the project directory
+          cd ~/bigbite-devops
+          
+          # Pull the latest code from GitHub
+          git pull origin main
+          
+          # Install Frontend dependencies and build
+          cd frontend
+          npm install
+          npm run build
+          
+          # Install Backend dependencies and restart PM2
+          cd ../backend
+          npm install
+          # Start or Restart using PM2
+          pm2 start ecosystem.config.cjs || pm2 restart bigbite-backend
+          pm2 save
