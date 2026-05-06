@@ -26,7 +26,37 @@ import { mapOrderToSocketData } from './utils/orderSocketData.js';
 
 // Load env vars
 dotenv.config();
+
+// ----- PROMETHEUS METRICS SETUP ----- //
+import client from 'prom-client';
+const collectDefaultMetrics = client.collectDefaultMetrics;
+collectDefaultMetrics({ register: client.register });
+
+const httpRequestDurationMicroseconds = new client.Histogram({
+  name: 'http_request_duration_seconds',
+  help: 'Duration of HTTP requests in seconds',
+  labelNames: ['method', 'route', 'code'],
+  buckets: [0.1, 0.3, 0.5, 0.7, 1, 3, 5, 7, 10]
+});
+
 const app = express();
+
+// Prometheus middleware to log incoming requests
+app.use((req, res, next) => {
+  res.on('finish', () => {
+    httpRequestDurationMicroseconds
+      .labels(req.method, req.route ? req.route.path : req.path, res.statusCode)
+      .observe(1); // Simplified observation
+  });
+  next();
+});
+
+// Setup prometheus /metrics endpoint
+app.get('/metrics', async (req, res) => {
+  res.set('Content-Type', client.register.contentType);
+  res.end(await client.register.metrics());
+});
+
 const httpServer = createServer(app);
 
 // Build an explicit allowlist; credentials cannot be combined with '*'
