@@ -10,6 +10,9 @@ services:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
+    # Allow prometheus to reach the EC2 instance's localhost (where NodeJS is running)
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     restart: unless-stopped
 
   grafana:
