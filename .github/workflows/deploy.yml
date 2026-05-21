@@ -55,13 +55,16 @@ jobs:
             # Pull the new docker-compose.yml configuration
             git pull origin main
             
-            # Clean up old unused docker images to free up disk space BEFORE pulling
+            # Stop running containers so their images can be deleted
+            sudo docker compose down
+            
+            # Wipe old images to free up disk space BEFORE pulling new ones
             sudo docker system prune -af --volumes
             
             # Pull the completely built images from docker hub
             sudo docker compose pull
             
-            # Restart the containers with the new images
+            # Start the new containers
             sudo docker compose up -d --remove-orphans
 
 
