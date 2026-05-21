@@ -1,41 +1,63 @@
-name: Deploy to EC2
+name: Deploy to EC2 via Docker Hub
 
 on:
   push:
     branches:
-      - main # Triggers the workflow when you push to the main branch
+      - main
 
 jobs:
-  deploy:
+  build-and-push:
     runs-on: ubuntu-latest
-
     steps:
-    - name: Checkout Code
-      uses: actions/checkout@v4
+      - name: Checkout Code
+        uses: actions/checkout@v4
 
-    - name: Deploy using ssh
-      uses: appleboy/ssh-action@master
-      with:
-        host: ${{ secrets.EC2_HOST }}
-        username: ${{ secrets.EC2_USERNAME }}
-        key: ${{ secrets.EC2_PRIVATE_KEY }}
-        port: 22
-        script: |
-          # Go to the project directory
-          cd ~/bigbite-devops
-          
-          # Pull the latest code from GitHub
-          git pull origin main
-          
-          # Install Frontend dependencies and build
-          cd frontend
-          npm install
-          npm run build
-          
-          # Install Backend dependencies and restart PM2
-          cd ../backend
-          npm install
-          # Start or Restart using PM2
-          pm2 start ecosystem.config.cjs || pm2 restart bigbite-backend
-          pm2 save
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and Push Backend
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          push: true
+          # Replace 'yourdockerhubusername' below!
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/bigbite-backend:latest
+
+      - name: Build and Push Frontend
+        uses: docker/build-push-action@v5
+        with:
+          context: ./frontend
+          push: true
+          # Read Vite variables from Github Secrets and pass to Dockerfile
+          build-args: |
+            VITE_API_URL=${{ secrets.VITE_API_URL }}
+            VITE_SERVER_URL=${{ secrets.VITE_SERVER_URL }}
+          # Replace 'yourdockerhubusername' below!
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/bigbite-frontend:latest
+
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to EC2
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_PRIVATE_KEY }}
+          port: 22
+          script: |
+            cd ~/bigbite-devops
+            
+            # Pull the new docker-compose.yml configuration
+            git pull origin main
+            
+            # Pull the completely built images from docker hub
+            sudo docker compose pull
+            
+            # Restart the containers with the new images
+            sudo docker compose up -d --remove-orphans
 

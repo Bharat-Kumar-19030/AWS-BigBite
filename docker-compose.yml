@@ -1,6 +1,27 @@
 version: '3.8'
 
 services:
+  # The Frontend Container (Includes Nginx to serve React and proxy to backend)
+  frontend:
+    image: bharatkumar19030/bigbite-frontend:latest
+    container_name: bigbite-frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  # The Backend Container
+  backend:
+    image: bharatkumar19030/bigbite-backend:latest
+    container_name: bigbite-backend
+    ports:
+      - "5000:5000"
+    # This tells docker to look for the physical .env file on the EC2 server setup
+    env_file:
+      - ./backend/.env
+    restart: unless-stopped
+
   prometheus:
     image: prom/prometheus:latest
     container_name: prometheus
@@ -10,9 +31,6 @@ services:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
-    # Allow prometheus to reach the EC2 instance's localhost (where NodeJS is running)
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     restart: unless-stopped
 
   grafana:
