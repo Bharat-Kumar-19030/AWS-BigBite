@@ -52,14 +52,28 @@ jobs:
           script: |
             cd ~/bigbite-devops
             
+            # Stop the host Nginx if it's still running, so Docker can use port 80
+            sudo systemctl stop nginx || true
+            sudo systemctl disable nginx || true
+            
+            # Aggressively clean old host-based node_modules and logs to free disk space
+            rm -rf ~/bigbite-devops/node_modules ~/bigbite-devops/frontend/node_modules ~/bigbite-devops/backend/node_modules || true
+            pm2 flush || true
+            rm -rf ~/.pm2/logs/* || true
+            sudo journalctl --vacuum-time=1d || true
+            sudo apt-get clean || true
+            
             # Pull the new docker-compose.yml configuration
             git pull origin main
             
             # Stop running containers so their images can be deleted
-            sudo docker compose down
+            sudo docker compose down || true
             
             # Wipe old images to free up disk space BEFORE pulling new ones
             sudo docker system prune -af --volumes
+            
+            # Print available disk space to verify
+            df -h
             
             # Pull the completely built images from docker hub
             sudo docker compose pull
