@@ -60,4 +60,7 @@ jobs:
             
             # Restart the containers with the new images
             sudo docker compose up -d --remove-orphans
+            
+            # Clean up old unused docker images to free up disk space
+            sudo docker system prune -af
 
