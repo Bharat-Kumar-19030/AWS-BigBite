@@ -807,7 +807,7 @@ setInterval(async () => {
 app.get('/api/health', (req, res) => {
   res.status(200).json({
     success: true,
-    message: 'Server is running after changes made by me',
+    message: 'Server is running after changes made by bharat kumar',
     timestamp: new Date().toISOString(),
   });
 });
