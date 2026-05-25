@@ -799,7 +799,7 @@ setInterval(async () => {
       console.log(`⏱️ Auto-rejected order: ${order._id}`);
     }
   } catch (error) {
-    console.error('❌ Error in auto-reject interval:', error);
+    console.error('Error in auto-reject interval:', error);
   }
 }, 60000); // Check every minute
 
@@ -807,7 +807,7 @@ setInterval(async () => {
 app.get('/api/health', (req, res) => {
   res.status(200).json({
     success: true,
-    message: 'Server is running after changes made by bharat kumar',
+    message: 'Server is healthy and running ',
     timestamp: new Date().toISOString(),
   });
 });
