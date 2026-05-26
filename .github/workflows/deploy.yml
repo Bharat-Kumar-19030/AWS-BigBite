@@ -23,7 +23,6 @@ jobs:
         with:
           context: ./backend
           push: true
-          # Replace 'yourdockerhubusername' below!
           tags: ${{ secrets.DOCKERHUB_USERNAME }}/bigbite-backend:latest
 
       - name: Build and Push Frontend
@@ -35,7 +34,6 @@ jobs:
           build-args: |
             VITE_API_URL=${{ secrets.VITE_API_URL }}
             VITE_SERVER_URL=${{ secrets.VITE_SERVER_URL }}
-          # Replace 'yourdockerhubusername' below!
           tags: ${{ secrets.DOCKERHUB_USERNAME }}/bigbite-frontend:latest
 
   deploy:
